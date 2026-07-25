@@ -11,15 +11,15 @@ Search by project, client, prompt fragment, workspace, or filename, then return 
 ![Data](https://img.shields.io/badge/data-local_only-111111)
 ![License](https://img.shields.io/badge/license-MIT-111111)
 
-> Current status: v1.1.0 for macOS and Windows.
+> Current status: v1.2.0 with separate English and Chinese editions for macOS and Windows.
 
 ## Demo
 
 This 26-second walkthrough runs in an isolated Demo Mode with fictional projects and synthetic AI histories. It does not read local sessions, indexes, paths, or manual traces.
 
-[![AI Project Finder demo](docs/demo-poster.png)](https://github.com/stevensilu/ai-project-finder/releases/download/v1.1.0/AI_Project_Finder_Demo_v1.1.0.mp4)
+[![AI Project Finder English demo](docs/demo-poster-en.png)](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_Demo_EN_v1.2.0.mp4)
 
-[Watch the full MP4](https://github.com/stevensilu/ai-project-finder/releases/download/v1.1.0/AI_Project_Finder_Demo_v1.1.0.mp4)
+[Watch the English demo MP4](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_Demo_EN_v1.2.0.mp4)
 
 The walkthrough covers:
 
@@ -99,7 +99,7 @@ The Python application uses only the standard library. No `pip install` step is 
 
 #### Release download
 
-1. Download and unzip the [latest release](https://github.com/stevensilu/ai-project-finder/releases/latest).
+1. Download and unzip [AI Project Finder — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_EN_macOS_v1.2.0.zip).
 2. Move the folder to a stable location, such as `~/Applications/AI Project Finder`.
 3. Control-click `install.command`, select **Open**, and approve the first launch.
 4. The dashboard opens at `http://127.0.0.1:4388`.
@@ -129,7 +129,7 @@ chmod +x install.command start.command
 
 #### Release download
 
-1. Download and unzip the [latest release](https://github.com/stevensilu/ai-project-finder/releases/latest).
+1. Download and unzip [AI Project Finder — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_EN_Windows_v1.2.0.zip).
 2. Move the folder to a stable location, such as `%LOCALAPPDATA%\Programs\AI Project Finder`.
 3. Double-click `install.bat`.
 4. The dashboard opens at `http://127.0.0.1:4388`.
@@ -167,6 +167,8 @@ landing page localization
 
 Results update while typing. Enter or **Search** moves the page to the first result.
 
+The English release keeps the application interface, installer messages, empty states, and Demo Mode in English. Indexed session titles and excerpts remain in their original language.
+
 ### Narrow the results
 
 - Select one or more AI sources.
@@ -202,6 +204,7 @@ The default `config.json` uses automatic discovery:
 {
   "port": 4388,
   "max_prompt_chars": 9000,
+  "locale": "en",
   "sources": {
     "codex": "auto",
     "claude": "auto",
@@ -266,7 +269,7 @@ See [SECURITY.md](SECURITY.md) for reporting guidance.
 - Kimi Desktop Work detection covers its embedded Kimi Code runtime on macOS and common Windows AppData layouts. A stable exact-conversation deep link is not currently available.
 - Regular Kimi cloud and web chats require a manual trace.
 - Moving or deleting a source transcript can make an older open action unavailable until the index is refreshed.
-- The current interface includes English navigation and some Chinese helper text.
+- The English and Chinese editions localize application-generated interface text. Content read from an existing AI session remains in its original language.
 - Windows indexing uses portable home-directory discovery. Individual session-open actions depend on the Windows client and its registered protocol support.
 
 ## Troubleshooting
@@ -345,7 +348,7 @@ Areas under consideration:
 - Improved conversation-level deep links as clients expose stable interfaces
 - Optional semantic and fuzzy search
 - Import and export for manual traces
-- Complete English and Chinese localization
+- Additional interface languages
 - Broader Windows and Linux integration coverage
 
 Roadmap items are exploratory and do not have committed release dates.

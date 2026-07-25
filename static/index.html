@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="en" data-theme="light" data-locale="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,8 +7,13 @@
   <script>
     (() => {
       const root = document.documentElement;
-      root.classList.add("theme-init");
-      const requestedTheme = new URLSearchParams(window.location.search).get("theme");
+      root.classList.add("theme-init", "locale-init");
+      const params = new URLSearchParams(window.location.search);
+      const requestedTheme = params.get("theme");
+      const requestedLocale = String(params.get("lang") || "en").toLowerCase();
+      window.__APF_LOCALE__ = requestedLocale.startsWith("zh") ? "zh-CN" : "en";
+      root.lang = window.__APF_LOCALE__;
+      root.dataset.locale = window.__APF_LOCALE__;
       root.dataset.theme = ["light", "dark"].includes(requestedTheme)
         ? requestedTheme
         : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -53,6 +58,7 @@
       transition: none!important;
       animation: none!important;
     }
+    html.locale-init body { visibility: hidden; }
     body {
       margin: 0;
       min-height: 100vh;
@@ -286,102 +292,102 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy">AI PROJECT FINDER <span class="suffix">/ LOCAL INDEX © 2026</span></span><span class="demo-badge" id="demoBadge" hidden>Demo data</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy" data-i18n-html="brand">AI PROJECT FINDER <span class="suffix">/ LOCAL INDEX © 2026</span></span><span class="demo-badge" id="demoBadge" data-i18n="demoData" hidden>Demo data</span></div>
     <div class="top-actions">
-      <button class="top-button" id="addButton" type="button">＋ <span class="top-action-label">Add trace</span></button>
-      <button class="top-button" id="refreshButton" type="button">↻ <span class="top-action-label">Refresh</span></button>
+      <button class="top-button" id="addButton" type="button">＋ <span class="top-action-label" data-i18n="addTrace">Add trace</span></button>
+      <button class="top-button" id="refreshButton" type="button">↻ <span class="top-action-label" data-i18n="refresh">Refresh</span></button>
       <button class="top-button theme-button" id="themeBtn" type="button">Lights off</button>
     </div>
   </header>
 
   <main class="wrap">
     <section class="hero" id="search-space">
-      <span class="label eyebrow">Cross-AI project locator / private local index</span>
+      <span class="label eyebrow" data-i18n="eyebrow">Cross-AI project locator / private local index</span>
       <h1>
         <span class="line"><span>AI PROJECT</span></span>
         <span class="line"><span class="red">FINDER.</span></span>
       </h1>
-      <p class="hero-note">搜索客户、项目、需求关键词、工作目录或产出文件名。每条结果保留处理工具、会话时间、工作空间与产出线索。</p>
+      <p class="hero-note" data-i18n="heroNote">Search clients, projects, request fragments, workspaces, or output filenames. Each result keeps the source tool, session time, workspace, and artifact clues.</p>
     </section>
 
     <div class="sticky-search-shell">
       <div class="search-unit tech-reveal">
         <span class="search-glyph" aria-hidden="true">⌕</span>
-        <input id="search" type="search" autocomplete="off" enterkeyhint="search" autofocus placeholder="ANYTHING YOU'VE BUILT BEFORE..." aria-label="搜索项目">
-        <button class="search-submit" id="searchSubmit" type="button">Search ↵</button>
+        <input id="search" type="search" autocomplete="off" enterkeyhint="search" autofocus placeholder="ANYTHING YOU'VE BUILT BEFORE..." aria-label="Search projects" data-i18n-placeholder="searchPlaceholder" data-i18n-aria="searchAria">
+        <button class="search-submit" id="searchSubmit" type="button" data-i18n="searchButton">Search ↵</button>
       </div>
     </div>
 
     <section class="section" id="records">
-      <div class="section-label tech-reveal">Trace Records</div>
-      <h2 class="section-title tech-reveal">定位会话与项目路径。</h2>
-      <p class="section-sub tech-reveal">来源、时间与视图可组合筛选。项目视图会聚合同一项目的多次 AI 处理记录。</p>
+      <div class="section-label tech-reveal" data-i18n="traceRecords">Trace Records</div>
+      <h2 class="section-title tech-reveal" data-i18n="sectionTitle">Find sessions and project paths.</h2>
+      <p class="section-sub tech-reveal" data-i18n="sectionSub">Combine source, time, and view filters. Project view groups multiple AI traces connected to the same project.</p>
 
       <div class="dashboard-grid">
-        <aside class="filter-rail tech-reveal" aria-label="搜索筛选">
+        <aside class="filter-rail tech-reveal" aria-label="Search filters" data-i18n-aria="filterAria">
           <div class="filter-block">
-            <h3 class="filter-title">Source</h3>
+            <h3 class="filter-title" data-i18n="source">Source</h3>
             <div id="sourceFilters"></div>
           </div>
           <div class="filter-block">
-            <h3 class="filter-title">View</h3>
+            <h3 class="filter-title" data-i18n="view">View</h3>
             <div class="segmented" id="viewSwitch">
-              <button class="active" type="button" data-view="sessions">Sessions</button>
-              <button type="button" data-view="projects">Projects</button>
+              <button class="active" type="button" data-view="sessions" data-i18n="sessions">Sessions</button>
+              <button type="button" data-view="projects" data-i18n="projects">Projects</button>
             </div>
           </div>
           <div class="filter-block">
-            <h3 class="filter-title">Updated</h3>
-            <select id="timeRange" aria-label="更新时间范围">
-              <option value="all">全部时间</option>
-              <option value="30">最近 30 天</option>
-              <option value="90">最近 90 天</option>
-              <option value="365">最近一年</option>
+            <h3 class="filter-title" data-i18n="updated">Updated</h3>
+            <select id="timeRange" aria-label="Updated range" data-i18n-aria="updatedAria">
+              <option value="all" data-i18n="allTime">All time</option>
+              <option value="30" data-i18n="last30">Last 30 days</option>
+              <option value="90" data-i18n="last90">Last 90 days</option>
+              <option value="365" data-i18n="lastYear">Last year</option>
             </select>
-            <p class="filter-note">LOCAL READ ONLY<br>会话源文件保持原状</p>
+            <p class="filter-note" data-i18n-html="readOnly">LOCAL READ ONLY<br>Source session files remain unchanged</p>
           </div>
           <div class="filter-block">
-            <h3 class="filter-title">Index status</h3>
-            <div class="mini-stats" aria-label="索引概况">
-              <div class="mini-stat"><strong id="statRecords">—</strong><span>Sessions</span></div>
-              <div class="mini-stat"><strong id="statProjects">—</strong><span>Projects</span></div>
-              <div class="mini-stat"><strong id="statSources">—</strong><span>AI sources</span></div>
-              <div class="mini-stat"><strong id="statUpdated">—</strong><span>Refreshed</span></div>
+            <h3 class="filter-title" data-i18n="indexStatus">Index status</h3>
+            <div class="mini-stats" aria-label="Index summary" data-i18n-aria="indexAria">
+              <div class="mini-stat"><strong id="statRecords">—</strong><span data-i18n="sessions">Sessions</span></div>
+              <div class="mini-stat"><strong id="statProjects">—</strong><span data-i18n="projects">Projects</span></div>
+              <div class="mini-stat"><strong id="statSources">—</strong><span data-i18n="aiSources">AI sources</span></div>
+              <div class="mini-stat"><strong id="statUpdated">—</strong><span data-i18n="refreshed">Refreshed</span></div>
             </div>
           </div>
         </aside>
 
         <div class="results tech-reveal">
           <div class="results-head">
-            <div><h3 id="resultsTitle">Recent traces</h3><div class="results-meta" id="resultsMeta">正在读取本地索引</div></div>
-            <select class="sort-select" id="sortMode" aria-label="排序方式">
-              <option value="relevance">相关度</option>
-              <option value="recent">最近更新</option>
-              <option value="oldest">较早更新</option>
+            <div><h3 id="resultsTitle" data-i18n="recentTraces">Recent traces</h3><div class="results-meta" id="resultsMeta" data-i18n="readingIndex">Reading local index</div></div>
+            <select class="sort-select" id="sortMode" aria-label="Sort order" data-i18n-aria="sortAria">
+              <option value="relevance" data-i18n="relevance">Relevance</option>
+              <option value="recent" data-i18n="newest">Newest</option>
+              <option value="oldest" data-i18n="oldest">Oldest</option>
             </select>
           </div>
-          <div class="result-list" id="resultList"><div class="loading"><div><span class="label">Building local trace index</span><div class="loading-line"></div></div></div></div>
+          <div class="result-list" id="resultList"><div class="loading"><div><span class="label" data-i18n="buildingIndex">Building local trace index</span><div class="loading-line"></div></div></div></div>
         </div>
       </div>
     </section>
 
-    <footer><span>AI Project Finder / local only</span><span>Codex · Claude · Kimi Code · Kimi Desktop · Manual</span></footer>
+    <footer><span data-i18n="footerLocal">AI Project Finder / local only</span><span data-i18n="footerSources">Codex · Claude · Kimi Code · Kimi Desktop · Manual</span></footer>
   </main>
 
   <div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <form class="modal" id="manualForm">
       <div class="modal-head">
-        <div><h2 id="modalTitle">Add trace</h2><p>适合 ChatGPT、网页端 Kimi 或无法自动读取历史的工具。</p></div>
-        <button class="close" id="closeModal" type="button" aria-label="关闭">×</button>
+        <div><h2 id="modalTitle" data-i18n="addTrace">Add trace</h2><p data-i18n="manualIntro">For ChatGPT, Kimi Web, or tools whose history cannot be read automatically.</p></div>
+        <button class="close" id="closeModal" type="button" aria-label="Close" data-i18n-aria="close">×</button>
       </div>
       <div class="form-grid">
-        <div class="field"><label for="manualSource">AI tool</label><input id="manualSource" name="source" placeholder="ChatGPT" required></div>
-        <div class="field"><label for="manualProject">Project / Client</label><input id="manualProject" name="project" placeholder="Atlas Launch"></div>
-        <div class="field full"><label for="manualTitle">Trace title</label><input id="manualTitle" name="title" placeholder="一句话描述这次处理" required></div>
-        <div class="field full"><label for="manualLocation">Link or local path</label><input id="manualLocation" name="location" placeholder="会话链接、项目文件夹或产出路径"></div>
-        <div class="field full"><label for="manualNotes">Search keywords</label><textarea id="manualNotes" name="notes" placeholder="需求、结果或便于未来搜索的关键词"></textarea></div>
+        <div class="field"><label for="manualSource" data-i18n="aiTool">AI tool</label><input id="manualSource" name="source" placeholder="ChatGPT" required></div>
+        <div class="field"><label for="manualProject" data-i18n="projectClient">Project / Client</label><input id="manualProject" name="project" placeholder="Atlas Launch" data-i18n-placeholder="projectPlaceholder"></div>
+        <div class="field full"><label for="manualTitle" data-i18n="traceTitle">Trace title</label><input id="manualTitle" name="title" placeholder="Describe this work in one sentence" data-i18n-placeholder="tracePlaceholder" required></div>
+        <div class="field full"><label for="manualLocation" data-i18n="locationLabel">Link or local path</label><input id="manualLocation" name="location" placeholder="Conversation link, project folder, or output path" data-i18n-placeholder="locationPlaceholder"></div>
+        <div class="field full"><label for="manualNotes" data-i18n="searchKeywords">Search keywords</label><textarea id="manualNotes" name="notes" placeholder="Request, outcome, or keywords for future search" data-i18n-placeholder="keywordsPlaceholder"></textarea></div>
       </div>
-      <div class="modal-actions"><button class="form-button" id="cancelModal" type="button">Cancel</button><button class="form-button primary" type="submit">Save trace</button></div>
+      <div class="modal-actions"><button class="form-button" id="cancelModal" type="button" data-i18n="cancel">Cancel</button><button class="form-button primary" type="submit" data-i18n="saveTrace">Save trace</button></div>
     </form>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -389,11 +395,129 @@
   <script src="/vendor/js/gsap.min.js"></script>
   <script src="/vendor/js/ScrollTrigger.min.js"></script>
   <script>
+    const LOCALE = window.__APF_LOCALE__ === "zh-CN" ? "zh-CN" : "en";
+    const COPY = {
+      en: {
+        pageTitle: "AI Project Finder · Local Project Index",
+        brand: `AI PROJECT FINDER <span class="suffix">/ LOCAL INDEX © 2026</span>`,
+        demoData: "Demo data", addTrace: "Add trace", refresh: "Refresh",
+        lightsOn: "Lights on", lightsOff: "Lights off",
+        eyebrow: "Cross-AI project locator / private local index",
+        heroNote: "Search clients, projects, request fragments, workspaces, or output filenames. Each result keeps the source tool, session time, workspace, and artifact clues.",
+        searchPlaceholder: "ANYTHING YOU'VE BUILT BEFORE...", searchAria: "Search projects", searchButton: "Search ↵",
+        traceRecords: "Trace Records", sectionTitle: "Find sessions and project paths.",
+        sectionSub: "Combine source, time, and view filters. Project view groups multiple AI traces connected to the same project.",
+        filterAria: "Search filters", source: "Source", view: "View", sessions: "Sessions", projects: "Projects",
+        updated: "Updated", updatedAria: "Updated range", allTime: "All time", last30: "Last 30 days",
+        last90: "Last 90 days", lastYear: "Last year",
+        readOnly: "LOCAL READ ONLY<br>Source session files remain unchanged",
+        indexStatus: "Index status", indexAria: "Index summary", aiSources: "AI sources", refreshed: "Refreshed",
+        recentTraces: "Recent traces", readingIndex: "Reading local index", sortAria: "Sort order",
+        relevance: "Relevance", newest: "Newest", oldest: "Oldest", buildingIndex: "Building local trace index",
+        footerLocal: "AI Project Finder / local only", footerSources: "Codex · Claude · Kimi Code · Kimi Desktop · Manual",
+        manualIntro: "For ChatGPT, Kimi Web, or tools whose history cannot be read automatically.",
+        close: "Close", aiTool: "AI tool", projectClient: "Project / Client", projectPlaceholder: "Atlas Launch", traceTitle: "Trace title",
+        tracePlaceholder: "Describe this work in one sentence", locationLabel: "Link or local path",
+        locationPlaceholder: "Conversation link, project folder, or output path", searchKeywords: "Search keywords",
+        keywordsPlaceholder: "Request, outcome, or keywords for future search", cancel: "Cancel", saveTrace: "Save trace",
+        unknown: "UNKNOWN", today: "TODAY", yesterday: "YESTERDAY", daysAgo: "{count}D AGO",
+        unclassifiedProject: "Unclassified project", pathUnavailable: "PATH UNAVAILABLE",
+        openWorkspace: "Open workspace", openCli: "Open CLI", openSession: "Open session ↗",
+        openKimiDesktop: "Open Kimi Desktop ↗", open: "Open ↗",
+        openSessionAria: "Open session: {title}", workspace: "Workspace", copyPath: "Copy path",
+        userInputs: "{count} USER INPUTS", localSession: "LOCAL SESSION", copySession: "Copy session",
+        traces: "{count} TRACES", workspaces: "{count} WORKSPACES", latest: "LATEST {date}",
+        traceHeading: "TRACE / {query}", recentTracesUpper: "RECENT TRACES",
+        sessionMeta: "{sessions} SESSIONS / {projects} PROJECT CLUES",
+        projectMeta: "{projects} PROJECTS / {traces} TRACES",
+        noMatch: "NO MATCHED TRACE", noMatchHelp: "Try a project alias, client name, request keyword, or filename.",
+        indexing: "Indexing", indexRefreshed: "INDEX REFRESHED", refreshIncomplete: "REFRESH INCOMPLETE",
+        opening: "Opening…", openingCodex: "OPENING CODEX", openingClaude: "OPENING CLAUDE",
+        openingKimiWeb: "OPENING KIMI WEB", openingKimiCli: "OPENING KIMI CLI",
+        openingKimiDesktop: "OPENING KIMI DESKTOP", openingWorkspace: "OPENING WORKSPACE",
+        openingWeb: "OPENING WEB SESSION", openingLocal: "OPENING LOCAL TRACE", openingSession: "OPENING SESSION",
+        demoWouldOpen: "DEMO · WOULD OPEN {target}", targetWeb: "WEB SESSION", targetLocal: "LOCAL TRACE",
+        sessionMoved: "SESSION MOVED · INDEX REFRESHED",
+        clientUnavailable: "AI CLIENT UNAVAILABLE", clientStarting: "AI CLIENT STARTING · TRY AGAIN",
+        serviceOffline: "LOCAL SERVICE OFFLINE", workspaceUnavailable: "WORKSPACE UNAVAILABLE",
+        sessionOpenFailed: "SESSION OPEN FAILED", pathCopied: "PATH COPIED", traceSaved: "TRACE SAVED",
+        traceNotSaved: "TRACE NOT SAVED", indexUnavailable: "INDEX UNAVAILABLE",
+        indexRestartHelp: "Restart AI Project Finder to continue searching.", other: "Other"
+      },
+      "zh-CN": {
+        pageTitle: "AI Project Finder · 本地项目索引",
+        brand: `AI PROJECT FINDER <span class="suffix">/ 本地索引 © 2026</span>`,
+        demoData: "演示数据", addTrace: "添加记录", refresh: "刷新",
+        lightsOn: "开灯", lightsOff: "关灯",
+        eyebrow: "跨 AI 项目定位 / 私有本地索引",
+        heroNote: "搜索客户、项目、需求关键词、工作目录或产出文件名。每条结果会保留处理工具、会话时间、工作空间与产出线索。",
+        searchPlaceholder: "搜索过去做过的任何项目...", searchAria: "搜索项目", searchButton: "搜索 ↵",
+        traceRecords: "记录索引", sectionTitle: "定位会话与项目路径。",
+        sectionSub: "来源、时间与视图可以组合筛选。项目视图会聚合同一项目的多次 AI 处理记录。",
+        filterAria: "搜索筛选", source: "来源", view: "视图", sessions: "会话", projects: "项目",
+        updated: "更新时间", updatedAria: "更新时间范围", allTime: "全部时间", last30: "最近 30 天",
+        last90: "最近 90 天", lastYear: "最近一年",
+        readOnly: "本地只读<br>会话源文件保持原状",
+        indexStatus: "索引状态", indexAria: "索引概况", aiSources: "AI 来源", refreshed: "刷新时间",
+        recentTraces: "最近记录", readingIndex: "正在读取本地索引", sortAria: "排序方式",
+        relevance: "相关度", newest: "最近更新", oldest: "较早更新", buildingIndex: "正在建立本地记录索引",
+        footerLocal: "AI Project Finder / 仅本地运行", footerSources: "Codex · Claude · Kimi Code · Kimi Desktop · 手动记录",
+        manualIntro: "适用于 ChatGPT、Kimi 网页版或无法自动读取历史的工具。",
+        close: "关闭", aiTool: "AI 工具", projectClient: "项目 / 客户", projectPlaceholder: "阿特拉斯发布", traceTitle: "记录标题",
+        tracePlaceholder: "用一句话描述这次处理", locationLabel: "会话链接或本地路径",
+        locationPlaceholder: "会话链接、项目文件夹或产出路径", searchKeywords: "搜索关键词",
+        keywordsPlaceholder: "需求、结果或便于未来搜索的关键词", cancel: "取消", saveTrace: "保存记录",
+        unknown: "未知", today: "今天", yesterday: "昨天", daysAgo: "{count} 天前",
+        unclassifiedProject: "未归类项目", pathUnavailable: "路径不可用",
+        openWorkspace: "打开工作区", openCli: "打开命令行", openSession: "打开会话 ↗",
+        openKimiDesktop: "打开 Kimi Desktop ↗", open: "打开 ↗",
+        openSessionAria: "打开会话：{title}", workspace: "工作区", copyPath: "复制路径",
+        userInputs: "{count} 次用户输入", localSession: "本地会话", copySession: "复制会话",
+        traces: "{count} 条记录", workspaces: "{count} 个工作区", latest: "最近 {date}",
+        traceHeading: "记录 / {query}", recentTracesUpper: "最近记录",
+        sessionMeta: "{sessions} 个会话 / {projects} 个项目线索",
+        projectMeta: "{projects} 个项目 / {traces} 条记录",
+        noMatch: "没有匹配记录", noMatchHelp: "可以尝试项目简称、客户名称、需求关键词或文件名。",
+        indexing: "正在建立索引", indexRefreshed: "索引已刷新", refreshIncomplete: "索引刷新未完成",
+        opening: "正在打开…", openingCodex: "正在打开 Codex", openingClaude: "正在打开 Claude",
+        openingKimiWeb: "正在打开 Kimi 网页版", openingKimiCli: "正在打开 Kimi 命令行",
+        openingKimiDesktop: "正在打开 Kimi Desktop", openingWorkspace: "正在打开工作区",
+        openingWeb: "正在打开网页会话", openingLocal: "正在打开本地记录", openingSession: "正在打开会话",
+        demoWouldOpen: "演示 · 将打开 {target}", targetWeb: "网页会话", targetLocal: "本地记录",
+        sessionMoved: "会话位置已变化 · 索引已刷新",
+        clientUnavailable: "AI 客户端不可用", clientStarting: "AI 客户端正在启动 · 可稍后重试",
+        serviceOffline: "本地服务未连接", workspaceUnavailable: "工作区不可用",
+        sessionOpenFailed: "会话打开失败", pathCopied: "路径已复制", traceSaved: "记录已保存",
+        traceNotSaved: "记录未保存", indexUnavailable: "索引不可用",
+        indexRestartHelp: "重新启动 AI Project Finder 后可以继续搜索。", other: "其他"
+      }
+    };
+    const copy = COPY[LOCALE];
+    const formatCopy = (key, values = {}) => Object.entries(values).reduce(
+      (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+      copy[key] || COPY.en[key] || key
+    );
+    const applyLocale = () => {
+      document.title = copy.pageTitle;
+      document.querySelectorAll("[data-i18n]").forEach((element) => {
+        element.textContent = formatCopy(element.dataset.i18n);
+      });
+      document.querySelectorAll("[data-i18n-html]").forEach((element) => {
+        element.innerHTML = formatCopy(element.dataset.i18nHtml);
+      });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+        element.setAttribute("placeholder", formatCopy(element.dataset.i18nPlaceholder));
+      });
+      document.querySelectorAll("[data-i18n-aria]").forEach((element) => {
+        element.setAttribute("aria-label", formatCopy(element.dataset.i18nAria));
+      });
+      root.classList.remove("locale-init");
+    };
     const state = {
       records: [], summary: {}, generatedAt: null, query: "", sources: new Set(),
-      view: "sessions", range: "all", sort: "relevance", demo: false
+      view: "sessions", range: "all", sort: "relevance", demo: false, locale: LOCALE
     };
-    const labels = { codex: "Codex", claude: "Claude", kimi: "Kimi Code", "kimi-desktop": "Kimi Desktop", other: "Other" };
+    const labels = { codex: "Codex", claude: "Claude", kimi: "Kimi Code", "kimi-desktop": "Kimi Desktop", other: copy.other };
     const root = document.documentElement;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const hasGsap = Boolean(window.gsap && window.ScrollTrigger);
@@ -402,7 +526,8 @@
     const normalize = (value = "") => String(value).toLowerCase().normalize("NFKC");
     const sourceClass = (source) => source === "kimi-desktop" ? "kimi" : (["codex", "claude", "kimi"].includes(source) ? source : "other");
 
-    function updateThemeLabel() { $("#themeBtn").textContent = root.getAttribute("data-theme") === "dark" ? "Lights on" : "Lights off"; }
+    function updateThemeLabel() { $("#themeBtn").textContent = root.getAttribute("data-theme") === "dark" ? copy.lightsOn : copy.lightsOff; }
+    applyLocale();
     updateThemeLabel();
     $("#themeBtn").addEventListener("click", () => {
       root.setAttribute("data-theme", root.getAttribute("data-theme") === "dark" ? "light" : "dark");
@@ -411,12 +536,12 @@
 
     function relativeDate(value) {
       const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return "UNKNOWN";
+      if (Number.isNaN(date.getTime())) return copy.unknown;
       const days = Math.floor((Date.now() - date.getTime()) / 86400000);
-      if (days <= 0) return "TODAY";
-      if (days === 1) return "YESTERDAY";
-      if (days < 30) return `${days}D AGO`;
-      return new Intl.DateTimeFormat("zh-CN", {year:"numeric", month:"2-digit", day:"2-digit"}).format(date);
+      if (days <= 0) return copy.today;
+      if (days === 1) return copy.yesterday;
+      if (days < 30) return formatCopy("daysAgo", {count: days});
+      return new Intl.DateTimeFormat(LOCALE === "zh-CN" ? "zh-CN" : "en-US", {year:"numeric", month:"2-digit", day:"2-digit"}).format(date);
     }
 
     function queryTokens(query) {
@@ -511,25 +636,25 @@
 
     function recordCard(record, index) {
       const artifacts = (record.artifacts || []).slice(0, 3).map((path) => `<span class="artifact" title="${escapeHtml(path)}">${escapeHtml(path.split("/").pop())}</span>`).join("");
-      const location = record.cwd || record.session_path || "PATH UNAVAILABLE";
+      const location = record.cwd || record.session_path || copy.pathUnavailable;
       const excerpt = matchedExcerpt(record, state.query);
       const recordId = escapeHtml(record.id || "");
-      const workspaceButton = record.cwd ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${recordId}">Open workspace</button>` : "";
-      const kimiCliButton = record.source === "kimi" ? `<button class="action-button" type="button" data-open-action="cli" data-record-id="${recordId}">Open CLI</button>` : "";
-      const openLabel = escapeHtml(record.open_label || "Open session ↗");
-      return `<article class="result-card tech-reveal" data-open-record-id="${recordId}" role="link" tabindex="0" aria-label="Open session: ${escapeHtml(record.title)}">
+      const workspaceButton = record.cwd ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${recordId}">${copy.openWorkspace}</button>` : "";
+      const kimiCliButton = record.source === "kimi" ? `<button class="action-button" type="button" data-open-action="cli" data-record-id="${recordId}">${copy.openCli}</button>` : "";
+      const openLabel = escapeHtml(record.source === "kimi-desktop" ? copy.openKimiDesktop : copy.openSession);
+      return `<article class="result-card tech-reveal" data-open-record-id="${recordId}" role="link" tabindex="0" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: record.title}))}">
         <div class="card-grid"><span class="record-no">${String(index + 1).padStart(3, "0")}</span>${badge(record)}<div class="card-main"><div class="card-project">${highlight(record.project, state.query)}${record.customer ? ` / ${highlight(record.customer, state.query)}` : ""}</div><h4 class="result-title">${highlight(record.title, state.query)}</h4></div><time class="date" datetime="${escapeHtml(record.updated_at)}">${relativeDate(record.updated_at)}</time></div>
-        <div class="path-row"><span class="path-label">Workspace</span><span class="path" title="${escapeHtml(location)}">${highlight(location, state.query)}</span><button class="copy" type="button" data-copy="${encodeURIComponent(location)}">Copy path</button></div>
+        <div class="path-row"><span class="path-label">${copy.workspace}</span><span class="path" title="${escapeHtml(location)}">${highlight(location, state.query)}</span><button class="copy" type="button" data-copy="${encodeURIComponent(location)}">${copy.copyPath}</button></div>
         ${excerpt ? `<div class="excerpt">${highlight(excerpt, state.query)}</div>` : ""}
         ${artifacts ? `<div class="artifact-list">${artifacts}</div>` : ""}
-        <div class="card-footer"><span>${Number(record.message_count || 0)} USER INPUTS / ${escapeHtml(record.origin || "LOCAL SESSION")}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">Copy session</button>${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
+        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(record.origin || copy.localSession)}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
       </article>`;
     }
 
     function projectCards(records) {
       const groups = new Map();
       records.forEach((record) => {
-        const key = record.project || "未归类项目";
+        const key = record.project || copy.unclassifiedProject;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(record);
       });
@@ -539,11 +664,17 @@
         const sourceBadges = sources.map((source) => badge({source, source_label: labels[source] || source})).join("");
         const lines = rows.slice(0, 5).map((row) => {
           const recordId = escapeHtml(row.id || "");
-          return `<div class="session-line" data-open-record-id="${recordId}" role="link" tabindex="0" aria-label="Open session: ${escapeHtml(row.title)}">${badge(row)}<div class="session-line-title" title="${escapeHtml(row.title)}">${highlight(row.title, state.query)}</div><time class="date">${relativeDate(row.updated_at)}</time><button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${escapeHtml(row.open_label || "Open ↗")}</button></div>`;
+          const lineOpenLabel = row.source === "kimi-desktop" ? copy.openKimiDesktop : copy.open;
+          return `<div class="session-line" data-open-record-id="${recordId}" role="link" tabindex="0" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: row.title}))}">${badge(row)}<div class="session-line-title" title="${escapeHtml(row.title)}">${highlight(row.title, state.query)}</div><time class="date">${relativeDate(row.updated_at)}</time><button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${escapeHtml(lineOpenLabel)}</button></div>`;
         }).join("");
         const latestId = escapeHtml(rows[0].id || "");
-        const workspaceButton = workspaces.length ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${latestId}">Open workspace</button>` : "";
-        return `<article class="result-card project-card tech-reveal"><div class="project-head"><span class="record-no">${String(index + 1).padStart(3, "0")}</span><div><h4>${highlight(project, state.query)}</h4><div class="project-summary">${rows.length} TRACES / ${workspaces.length} WORKSPACES / LATEST ${relativeDate(rows[0].updated_at)}</div></div><div class="project-side"><div class="source-stack">${sourceBadges}</div>${workspaceButton}</div></div><div class="session-lines">${lines}</div></article>`;
+        const workspaceButton = workspaces.length ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${latestId}">${copy.openWorkspace}</button>` : "";
+        const projectSummary = [
+          formatCopy("traces", {count: rows.length}),
+          formatCopy("workspaces", {count: workspaces.length}),
+          formatCopy("latest", {date: relativeDate(rows[0].updated_at)})
+        ].join(" / ");
+        return `<article class="result-card project-card tech-reveal"><div class="project-head"><span class="record-no">${String(index + 1).padStart(3, "0")}</span><div><h4>${highlight(project, state.query)}</h4><div class="project-summary">${projectSummary}</div></div><div class="project-side"><div class="source-stack">${sourceBadges}</div>${workspaceButton}</div></div><div class="session-lines">${lines}</div></article>`;
       }).join("");
     }
 
@@ -558,10 +689,12 @@
     function render() {
       const records = filteredRecords();
       const projectCount = new Set(records.map((record) => record.project)).size;
-      $("#resultsTitle").textContent = state.query ? `TRACE / ${state.query}` : "RECENT TRACES";
-      $("#resultsMeta").textContent = state.view === "sessions" ? `${records.length} SESSIONS / ${projectCount} PROJECT CLUES` : `${projectCount} PROJECTS / ${records.length} TRACES`;
+      $("#resultsTitle").textContent = state.query ? formatCopy("traceHeading", {query: state.query}) : copy.recentTracesUpper;
+      $("#resultsMeta").textContent = state.view === "sessions"
+        ? formatCopy("sessionMeta", {sessions: records.length, projects: projectCount})
+        : formatCopy("projectMeta", {projects: projectCount, traces: records.length});
       if (!records.length) {
-        $("#resultList").innerHTML = `<div class="empty"><div><strong>NO MATCHED TRACE</strong><span>可以换一个项目简称、客户名、需求关键词或文件名。</span></div></div>`;
+        $("#resultList").innerHTML = `<div class="empty"><div><strong>${copy.noMatch}</strong><span>${copy.noMatchHelp}</span></div></div>`;
         return;
       }
       $("#resultList").innerHTML = state.view === "sessions" ? records.slice(0, 160).map(recordCard).join("") : projectCards(records);
@@ -576,16 +709,16 @@
 
     function animateNumber(element, value) {
       const target = Number(value || 0);
-      if (!hasGsap || reduce) { element.textContent = target.toLocaleString("zh-CN"); return; }
+      if (!hasGsap || reduce) { element.textContent = target.toLocaleString(LOCALE === "zh-CN" ? "zh-CN" : "en-US"); return; }
       const counter = {value: 0};
-      window.gsap.to(counter, {value: target, duration: 1.15, ease:"power2.out", onUpdate:() => { element.textContent = Math.round(counter.value).toLocaleString("zh-CN"); }});
+      window.gsap.to(counter, {value: target, duration: 1.15, ease:"power2.out", onUpdate:() => { element.textContent = Math.round(counter.value).toLocaleString(LOCALE === "zh-CN" ? "zh-CN" : "en-US"); }});
     }
 
     function renderStats() {
       animateNumber($("#statRecords"), state.summary.records);
       animateNumber($("#statProjects"), state.summary.projects);
       animateNumber($("#statSources"), Object.keys(state.summary.sources || {}).length);
-      $("#statUpdated").textContent = state.generatedAt ? relativeDate(state.generatedAt).replace(" AGO", "") : "—";
+      $("#statUpdated").textContent = state.generatedAt ? relativeDate(state.generatedAt) : "—";
     }
 
     function toast(message) {
@@ -614,17 +747,17 @@
     async function refreshIndex() {
       const button = $("#refreshButton");
       button.disabled = true;
-      button.innerHTML = `↻ <span class="top-action-label">Indexing</span>`;
+      button.innerHTML = `↻ <span class="top-action-label">${copy.indexing}</span>`;
       try {
         const response = await fetch("/api/reindex", {method:"POST"});
         if (!response.ok) throw new Error("refresh failed");
         await loadIndex();
-        toast("INDEX REFRESHED");
+        toast(copy.indexRefreshed);
       } catch (error) {
-        toast("REFRESH INCOMPLETE");
+        toast(copy.refreshIncomplete);
       } finally {
         button.disabled = false;
-        button.innerHTML = `↻ <span class="top-action-label">Refresh</span>`;
+        button.innerHTML = `↻ <span class="top-action-label">${copy.refresh}</span>`;
       }
     }
 
@@ -644,7 +777,7 @@
     }
     async function openRecord(recordId, action = "session", button = null) {
       const original = button?.textContent || "";
-      if (button) { button.disabled = true; button.textContent = "Opening…"; }
+      if (button) { button.disabled = true; button.textContent = copy.opening; }
       try {
         const response = await fetch("/api/open", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({record_id:recordId, action})});
         const payload = await response.json().catch(() => ({}));
@@ -653,21 +786,31 @@
           error.code = payload.error_code || (response.status === 404 ? "record_missing" : "open_failed");
           throw error;
         }
-        const messages = {codex:"OPENING CODEX", claude:"OPENING CLAUDE", "kimi-web":"OPENING KIMI WEB", "kimi-cli":"OPENING KIMI CLI", "kimi-desktop":"OPENING KIMI DESKTOP", workspace:"OPENING WORKSPACE", web:"OPENING WEB SESSION", local:"OPENING LOCAL TRACE"};
-        const message = messages[payload.mode] || "OPENING SESSION";
-        toast(payload.demo ? `DEMO · ${message.replace("OPENING", "WOULD OPEN")}` : message);
+        const messages = {
+          codex: copy.openingCodex, claude: copy.openingClaude,
+          "kimi-web": copy.openingKimiWeb, "kimi-cli": copy.openingKimiCli,
+          "kimi-desktop": copy.openingKimiDesktop, workspace: copy.openingWorkspace,
+          web: copy.openingWeb, local: copy.openingLocal
+        };
+        const demoTargets = {
+          codex: "Codex", claude: "Claude", "kimi-web": "Kimi Web",
+          "kimi-cli": "Kimi CLI", "kimi-desktop": "Kimi Desktop",
+          workspace: copy.workspace, web: copy.targetWeb, local: copy.targetLocal
+        };
+        const message = messages[payload.mode] || copy.openingSession;
+        toast(payload.demo ? formatCopy("demoWouldOpen", {target: demoTargets[payload.mode] || copy.openSession}) : message);
       } catch (error) {
         if (error.code === "target_unavailable" || error.code === "record_missing") {
           await loadIndex().catch(() => {});
-          toast("SESSION MOVED · INDEX REFRESHED");
+          toast(copy.sessionMoved);
         } else if (error.code === "client_open_failed") {
-          toast("AI CLIENT UNAVAILABLE");
+          toast(copy.clientUnavailable);
         } else if (error.code === "open_timeout") {
-          toast("AI CLIENT STARTING · TRY AGAIN");
+          toast(copy.clientStarting);
         } else if (error instanceof TypeError) {
-          toast("LOCAL SERVICE OFFLINE");
+          toast(copy.serviceOffline);
         } else {
-          toast(action === "workspace" ? "WORKSPACE UNAVAILABLE" : "SESSION OPEN FAILED");
+          toast(action === "workspace" ? copy.workspaceUnavailable : copy.sessionOpenFailed);
         }
       } finally {
         if (button) { button.disabled = false; button.textContent = original; }
@@ -699,7 +842,7 @@
       const copyButton = event.target.closest("[data-copy]");
       if (copyButton) {
         const value = decodeURIComponent(copyButton.dataset.copy || "");
-        try { await navigator.clipboard.writeText(value); toast("PATH COPIED"); } catch (_) { toast(value); }
+        try { await navigator.clipboard.writeText(value); toast(copy.pathCopied); } catch (_) { toast(value); }
         return;
       }
       const actionButton = event.target.closest("[data-open-action]");
@@ -729,8 +872,8 @@
       try {
         const response = await fetch("/api/manual", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
         if (!response.ok) throw new Error("save failed");
-        event.target.reset(); closeModal(); await loadIndex(); toast("TRACE SAVED");
-      } catch (_) { toast("TRACE NOT SAVED"); }
+        event.target.reset(); closeModal(); await loadIndex(); toast(copy.traceSaved);
+      } catch (_) { toast(copy.traceNotSaved); }
     });
     document.addEventListener("keydown", (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("#search").focus(); }
@@ -738,8 +881,8 @@
     });
 
     loadIndex().catch(() => {
-      $("#resultList").innerHTML = `<div class="empty"><div><strong>INDEX UNAVAILABLE</strong><span>重新启动 AI Project Finder 后可以继续搜索。</span></div></div>`;
-      $("#resultsMeta").textContent = "LOCAL SERVICE OFFLINE";
+      $("#resultList").innerHTML = `<div class="empty"><div><strong>${copy.indexUnavailable}</strong><span>${copy.indexRestartHelp}</span></div></div>`;
+      $("#resultsMeta").textContent = copy.serviceOffline;
     });
   </script>
 </body>

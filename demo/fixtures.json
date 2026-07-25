@@ -242,5 +242,129 @@
       "message_count": 5,
       "origin": "Kimi Desktop / Work"
     }
-  ]
+  ],
+  "translations": {
+    "zh-CN": {
+      "demo-atlas-claude": {
+        "project": "阿特拉斯发布",
+        "title": "梳理阿特拉斯发布定位、常见问题与管理层简报",
+        "excerpt": "将阿特拉斯发布研究整理为清晰的定位叙事、管理层简报和客户常见问题。",
+        "artifacts": ["~/演示工作区/阿特拉斯发布/发布简报.md"]
+      },
+      "demo-atlas-codex": {
+        "project": "阿特拉斯发布",
+        "title": "制作阿特拉斯发布准备度仪表盘与 CSV 导出",
+        "excerpt": "制作响应式发布准备度仪表盘，包含负责人筛选、里程碑状态和清晰的 CSV 导出。",
+        "artifacts": ["~/演示工作区/阿特拉斯发布/准备度仪表盘.html", "~/演示工作区/阿特拉斯发布/里程碑.csv"]
+      },
+      "demo-atlas-kimi-code": {
+        "project": "阿特拉斯发布",
+        "title": "将阿特拉斯测试访谈整理为优先主题",
+        "excerpt": "将测试访谈归纳为激活、清晰度、信任和工作流主题，并按照发布影响排序。",
+        "artifacts": ["~/演示工作区/阿特拉斯发布/访谈主题.csv"]
+      },
+      "demo-atlas-kimi-desktop": {
+        "project": "阿特拉斯发布",
+        "title": "整理阿特拉斯竞品引导流程与激活机制",
+        "excerpt": "比较五个引导流程，记录模板、协作功能和升级提示出现的位置。",
+        "artifacts": ["~/演示工作区/阿特拉斯发布/引导流程地图.md"]
+      },
+      "demo-orbit-codex": {
+        "project": "轨道分析",
+        "title": "实现轨道分析事件质量监控",
+        "excerpt": "增加事件缺失检测、字段变化提醒和简洁的产品数据每日质量摘要。",
+        "artifacts": ["~/演示工作区/轨道分析/事件质量监控.py"]
+      },
+      "demo-orbit-claude": {
+        "project": "轨道分析",
+        "title": "定义轨道分析每周产品洞察叙事",
+        "excerpt": "将激活、留存和功能采用信号整理为产品团队的每周决策简报。",
+        "artifacts": ["~/演示工作区/轨道分析/每周洞察模板.md"]
+      },
+      "demo-orbit-kimi-code": {
+        "project": "轨道分析",
+        "title": "复核实验提升计算与边界情况",
+        "excerpt": "检查最新激活实验的分母、置信区间和排除规则。",
+        "artifacts": ["~/演示工作区/轨道分析/实验复核.md"]
+      },
+      "demo-orbit-kimi-desktop": {
+        "project": "轨道分析",
+        "title": "总结仪表盘可用性访谈",
+        "excerpt": "从八份合成访谈中提取反复出现的导航、标签和导出问题。",
+        "artifacts": ["~/演示工作区/轨道分析/可用性总结.md"]
+      },
+      "demo-relay-codex": {
+        "project": "中继客服",
+        "title": "制作中继客服分流分类器原型",
+        "excerpt": "制作本地原型，按照紧急度、账号影响和负责团队标记请求。",
+        "artifacts": ["~/演示工作区/中继客服/分流原型.py"]
+      },
+      "demo-relay-claude": {
+        "project": "中继客服",
+        "title": "编写克制清晰的客服回复规范",
+        "excerpt": "为账单、服务中断和产品反馈场景整理回复原则与示例。",
+        "artifacts": ["~/演示工作区/中继客服/回复规范.md"]
+      },
+      "demo-relay-kimi-code": {
+        "project": "中继客服",
+        "title": "分析客服样本中的重复需求主题",
+        "excerpt": "在合成客服导出中识别设置、权限、账单和性能等重复主题。",
+        "artifacts": ["~/演示工作区/中继客服/需求主题.csv"]
+      },
+      "demo-moss-claude": {
+        "project": "苔藓工作室",
+        "title": "完善苔藓工作室作品集案例",
+        "excerpt": "调整作品集叙事的清晰度、节奏和克制的编辑风格。",
+        "artifacts": ["~/演示工作区/苔藓工作室/案例文案.md"]
+      },
+      "demo-moss-codex": {
+        "project": "苔藓工作室",
+        "title": "修复响应式画廊布局与键盘导航",
+        "excerpt": "修复平板宽度下的画廊网格，并增加清晰焦点状态和稳定键盘导航。",
+        "artifacts": ["~/演示工作区/苔藓工作室/画廊.html"]
+      },
+      "demo-moss-kimi-desktop": {
+        "project": "苔藓工作室",
+        "title": "收集克制型工作室作品集参考",
+        "excerpt": "按照字体、间距、导航和图片顺序整理下一轮设计参考。",
+        "artifacts": ["~/演示工作区/苔藓工作室/参考笔记.md"]
+      },
+      "demo-field-kimi-code": {
+        "project": "田野笔记",
+        "title": "提炼田野笔记摘要的研究主题",
+        "excerpt": "将访谈片段整理为记录习惯、检索、信任和协作主题。",
+        "artifacts": ["~/演示工作区/田野笔记/主题矩阵.csv"]
+      },
+      "demo-field-codex": {
+        "project": "田野笔记",
+        "title": "生成可搜索的研究笔记查看器",
+        "excerpt": "制作带有标签筛选、全文搜索和来源链接的本地研究笔记查看器。",
+        "artifacts": ["~/演示工作区/田野笔记/研究查看器.html"]
+      },
+      "demo-field-kimi-desktop": {
+        "project": "田野笔记",
+        "title": "比较研究工具的笔记检索方式",
+        "excerpt": "比较五个工具在来源回溯、双向链接、标签和时间浏览方面的支持。",
+        "artifacts": ["~/演示工作区/田野笔记/检索比较.md"]
+      },
+      "demo-signal-claude": {
+        "project": "信号库",
+        "title": "定义信号库命名与贡献规则",
+        "excerpt": "为可复用产品信号整理简洁分类、贡献清单和复核说明。",
+        "artifacts": ["~/演示工作区/信号库/贡献指南.md"]
+      },
+      "demo-signal-kimi-code": {
+        "project": "信号库",
+        "title": "规范化初始信号目录",
+        "excerpt": "清理重复标签、统一负责人字段，并标记缺少证据的记录。",
+        "artifacts": ["~/演示工作区/信号库/信号目录.csv"]
+      },
+      "demo-signal-kimi-desktop": {
+        "project": "信号库",
+        "title": "收集信号目录的视觉参考",
+        "excerpt": "收集紧凑数据字典、模式库和证据型文档的参考案例。",
+        "artifacts": ["~/演示工作区/信号库/视觉参考.md"]
+      }
+    }
+  }
 }

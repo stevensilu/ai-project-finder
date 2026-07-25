@@ -23,6 +23,13 @@ class AutomaticPathsTest(unittest.TestCase):
                 "kimi-desktop": "auto",
             },
         )
+        self.assertEqual(app.DEFAULT_CONFIG["locale"], "en")
+
+    def test_locale_normalization_is_deterministic(self) -> None:
+        self.assertEqual(app.normalize_locale("en"), "en")
+        self.assertEqual(app.normalize_locale("EN-us"), "en")
+        self.assertEqual(app.normalize_locale("zh"), "zh-CN")
+        self.assertEqual(app.normalize_locale("zh_TW"), "zh-CN")
 
     def test_custom_paths_expand_home_and_environment(self) -> None:
         with patch.dict("os.environ", {"APF_FIXTURE_ROOT": "/tmp/apf-fixture"}):
@@ -182,6 +189,19 @@ class DemoFixtureTest(unittest.TestCase):
         self.assertTrue(payload["demo"])
         self.assertEqual(len(payload["records"]), 20)
 
+    def test_chinese_demo_payload_uses_localized_project_content(self) -> None:
+        with patch.object(app, "APP_LOCALE", "zh-CN"):
+            payload = app.load_demo_payload()
+        atlas = [
+            record
+            for record in payload["records"]
+            if record["session_id"].startswith("demo-atlas-")
+        ]
+        self.assertEqual(len(atlas), 4)
+        self.assertTrue(all(record["project"] == "阿特拉斯发布" for record in atlas))
+        self.assertTrue(all(str(record["cwd"]).startswith("~/演示工作区/") for record in atlas))
+        self.assertTrue(all("阿特拉斯" in record["search_text"] for record in atlas))
+
     def test_demo_main_skips_local_config_and_source_build(self) -> None:
         class FakeServer:
             def serve_forever(self) -> None:
@@ -194,6 +214,7 @@ class DemoFixtureTest(unittest.TestCase):
         with (
             patch("sys.argv", ["app.py", "--demo"]),
             patch.object(app, "DEMO_MODE", False),
+            patch.object(app, "APP_LOCALE", "en"),
             patch.object(app, "load_config", side_effect=AssertionError("local config read")),
             patch.object(app, "build_index", side_effect=AssertionError("real source scan")),
             patch.object(app, "ThreadingHTTPServer", return_value=fake_server) as server_factory,
@@ -204,6 +225,26 @@ class DemoFixtureTest(unittest.TestCase):
             ("127.0.0.1", app.DEMO_DEFAULT_PORT),
             app.FinderHandler,
         )
+        self.assertEqual(app.APP_LOCALE, "en")
+
+    def test_demo_main_accepts_explicit_chinese_locale(self) -> None:
+        class FakeServer:
+            def serve_forever(self) -> None:
+                return
+
+            def server_close(self) -> None:
+                return
+
+        with (
+            patch("sys.argv", ["app.py", "--demo", "--locale", "zh-CN"]),
+            patch.object(app, "DEMO_MODE", False),
+            patch.object(app, "APP_LOCALE", "en"),
+            patch.object(app, "load_config", side_effect=AssertionError("local config read")),
+            patch.object(app, "ThreadingHTTPServer", return_value=FakeServer()),
+            patch("builtins.print"),
+        ):
+            app.main()
+            self.assertEqual(app.APP_LOCALE, "zh-CN")
 
 
 class DemoHTTPIsolationTest(unittest.TestCase):

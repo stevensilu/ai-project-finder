@@ -22,7 +22,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -36,10 +36,12 @@ DEMO_FIXTURE_FILE = APP_DIR / "demo" / "fixtures.json"
 DEMO_DEFAULT_PORT = 4390
 DEMO_MODE = False
 IS_WINDOWS = os.name == "nt"
+APP_LOCALE = "en"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "port": 4388,
     "max_prompt_chars": 9000,
+    "locale": "en",
     "sources": {
         "codex": "auto",
         "claude": "auto",
@@ -88,6 +90,11 @@ GENERIC_DIRS = {
 def environment_home(name: str, default: Path) -> Path:
     raw = str(os.environ.get(name) or "").strip()
     return Path(raw).expanduser() if raw else default
+
+
+def normalize_locale(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("_", "-")
+    return "zh-CN" if raw.startswith("zh") else "en"
 
 
 def automatic_source_paths() -> dict[str, list[Path]]:
@@ -167,6 +174,11 @@ def load_demo_payload() -> dict[str, Any]:
 
     now = datetime.now(tz=timezone.utc)
     records: list[dict[str, Any]] = []
+    locale_overrides = (
+        fixture.get("translations", {}).get(APP_LOCALE, {})
+        if isinstance(fixture.get("translations"), dict)
+        else {}
+    )
     labels = {
         "codex": "Codex",
         "claude": "Claude",
@@ -178,8 +190,17 @@ def load_demo_payload() -> dict[str, Any]:
             continue
         source = str(raw.get("source") or "").strip().lower()
         session_id = str(raw.get("session_id") or f"demo-{position:03d}").strip()
-        project = str(raw.get("project") or "Demo Project").strip()
-        title = str(raw.get("title") or project).strip()
+        localized = (
+            locale_overrides.get(session_id, {})
+            if isinstance(locale_overrides, dict)
+            else {}
+        )
+        if not isinstance(localized, dict):
+            localized = {}
+        project = str(
+            localized.get("project") or raw.get("project") or "Demo Project"
+        ).strip()
+        title = str(localized.get("title") or raw.get("title") or project).strip()
         if source not in labels or not SESSION_ID_RE.fullmatch(session_id):
             raise RuntimeError(f"invalid demo record at position {position}")
         try:
@@ -190,13 +211,19 @@ def load_demo_payload() -> dict[str, Any]:
             raise RuntimeError(f"invalid demo timing at position {position}") from exc
         updated_at = (now - timedelta(hours=updated_hours)).isoformat()
         created_at = (now - timedelta(hours=created_hours)).isoformat()
-        cwd = str(raw.get("cwd") or f"~/Demo Workspaces/{project}").strip()
-        excerpt = str(raw.get("excerpt") or "").strip()
+        default_workspace = (
+            f"~/演示工作区/{project}"
+            if APP_LOCALE == "zh-CN"
+            else f"~/Demo Workspaces/{project}"
+        )
+        cwd = str(localized.get("cwd") or raw.get("cwd") or default_workspace).strip()
+        excerpt = str(localized.get("excerpt") or raw.get("excerpt") or "").strip()
+        raw_artifacts = localized.get("artifacts", raw.get("artifacts", []))
         artifacts = [
             str(item).strip()
-            for item in raw.get("artifacts", [])
+            for item in raw_artifacts
             if str(item).strip()
-        ] if isinstance(raw.get("artifacts", []), list) else []
+        ] if isinstance(raw_artifacts, list) else []
         record = {
             "id": f"{source}:{session_id}",
             "source": source,
@@ -212,7 +239,7 @@ def load_demo_payload() -> dict[str, Any]:
             "created_at": created_at,
             "updated_at": updated_at,
             "message_count": message_count,
-            "origin": str(raw.get("origin") or labels[source]),
+            "origin": str(localized.get("origin") or raw.get("origin") or labels[source]),
             "search_text": " ".join(
                 [title, project, cwd, excerpt, *artifacts]
             ).lower(),
@@ -226,6 +253,7 @@ def load_demo_payload() -> dict[str, Any]:
     projects = {str(item["project"]) for item in records if item.get("project")}
     return {
         "demo": True,
+        "locale": APP_LOCALE,
         "generated_at": now.isoformat(),
         "records": records,
         "summary": {
@@ -1150,6 +1178,16 @@ class FinderHandler(SimpleHTTPRequestHandler):
             })
             return
         if parsed.path == "/":
+            query = parse_qs(parsed.query)
+            if "lang" not in query:
+                separator = "&" if parsed.query else ""
+                self.send_response(HTTPStatus.TEMPORARY_REDIRECT)
+                self.send_header(
+                    "Location",
+                    f"/?{parsed.query}{separator}lang={quote(APP_LOCALE, safe='-')}",
+                )
+                self.end_headers()
+                return
             self.path = "/index.html"
         super().do_GET()
 
@@ -1231,11 +1269,17 @@ class FinderHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    global DEMO_MODE
+    global APP_LOCALE, DEMO_MODE
     parser = argparse.ArgumentParser(description="AI Project Finder local dashboard")
     parser.add_argument("--build-only", action="store_true", help="refresh index and exit")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--open", action="store_true", help="open the dashboard in the default browser")
+    parser.add_argument(
+        "--locale",
+        choices=("en", "zh-CN"),
+        default=None,
+        help="interface language; overrides config.json and AI_PROJECT_FINDER_LOCALE",
+    )
     parser.add_argument(
         "--demo",
         action="store_true",
@@ -1243,43 +1287,72 @@ def main() -> None:
     )
     args = parser.parse_args()
     DEMO_MODE = bool(args.demo)
+    locale_override = args.locale or os.environ.get("AI_PROJECT_FINDER_LOCALE")
+    config = {} if DEMO_MODE else load_config()
+    APP_LOCALE = normalize_locale(
+        locale_override or ("en" if DEMO_MODE else config.get("locale", "en"))
+    )
+    is_chinese = APP_LOCALE == "zh-CN"
 
     if args.build_only:
         payload = load_demo_payload() if DEMO_MODE else build_index()
-        print(
-            f"Indexed {payload['summary']['records']} sessions across "
-            f"{payload['summary']['projects']} project clues."
-        )
+        if is_chinese:
+            print(
+                f"已索引 {payload['summary']['records']} 个会话，"
+                f"包含 {payload['summary']['projects']} 个项目线索。"
+            )
+        else:
+            print(
+                f"Indexed {payload['summary']['records']} sessions across "
+                f"{payload['summary']['projects']} project clues."
+            )
         return
 
     if DEMO_MODE:
         payload = load_demo_payload()
-        print(
-            f"Loaded {payload['summary']['records']} synthetic sessions across "
-            f"{payload['summary']['projects']} demo projects."
-        )
+        if is_chinese:
+            print(
+                f"已载入 {payload['summary']['records']} 个合成会话，"
+                f"包含 {payload['summary']['projects']} 个演示项目。"
+            )
+        else:
+            print(
+                f"Loaded {payload['summary']['records']} synthetic sessions across "
+                f"{payload['summary']['projects']} demo projects."
+            )
     elif not INDEX_FILE.exists():
         payload = build_index()
-        print(
-            f"Indexed {payload['summary']['records']} sessions across "
-            f"{payload['summary']['projects']} project clues."
-        )
+        if is_chinese:
+            print(
+                f"已索引 {payload['summary']['records']} 个会话，"
+                f"包含 {payload['summary']['projects']} 个项目线索。"
+            )
+        else:
+            print(
+                f"Indexed {payload['summary']['records']} sessions across "
+                f"{payload['summary']['projects']} project clues."
+            )
     else:
         threading.Thread(target=build_index, daemon=True, name="index-refresh").start()
 
-    config = {} if DEMO_MODE else load_config()
     port = args.port or (DEMO_DEFAULT_PORT if DEMO_MODE else int(config.get("port", 4388)))
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://127.0.0.1:{port}/?lang={quote(APP_LOCALE, safe='-')}"
     try:
         server = ThreadingHTTPServer(("127.0.0.1", port), FinderHandler)
     except OSError as exc:
         if exc.errno in {errno.EADDRINUSE, 48, 98}:
-            print(f"AI Project Finder is already available at {url}")
+            if is_chinese:
+                print(f"AI Project Finder 已经在此地址运行：{url}")
+            else:
+                print(f"AI Project Finder is already available at {url}")
             if args.open:
                 webbrowser.open(url)
             return
         raise
-    print(f"AI Project Finder is available at {url}")
+    if is_chinese:
+        print(f"AI Project Finder 已在此地址运行：{url}")
+    else:
+        print(f"AI Project Finder is available at {url}")
     if args.open:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:

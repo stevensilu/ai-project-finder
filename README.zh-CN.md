@@ -11,21 +11,21 @@
 ![数据](https://img.shields.io/badge/data-local_only-111111)
 ![许可](https://img.shields.io/badge/license-MIT-111111)
 
-> 当前状态：v1.1.0，支持 macOS 与 Windows。
+> 当前状态：v1.2.0，提供独立的英文版与中文版，均支持 macOS 与 Windows。
 
-## Demo
+## 演示
 
-这段 26 秒演示在完全隔离的 Demo Mode 中运行，使用虚构项目与合成 AI 历史。Demo Mode 不会读取本地 session、index、路径或 manual trace。
+这段约 26 秒的中文版演示在完全隔离的演示模式中运行，使用虚构项目与合成 AI 历史，不会读取本地会话、索引、路径或手工记录。
 
-[![AI Project Finder demo](docs/demo-poster.png)](https://github.com/stevensilu/ai-project-finder/releases/download/v1.1.0/AI_Project_Finder_Demo_v1.1.0.mp4)
+[![AI Project Finder 中文版演示](docs/demo-poster-zh.png)](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_Demo_ZH_v1.2.0.mp4)
 
-[观看完整 MP4](https://github.com/stevensilu/ai-project-finder/releases/download/v1.1.0/AI_Project_Finder_Demo_v1.1.0.mp4)
+[观看中文版演示 MP4](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_Demo_ZH_v1.2.0.mp4)
 
 演示内容包括：
 
-1. 通过记得的 `Atlas Launch` 关键词搜索。
-2. 切换 light 与 dark 主题。
-3. 从 Sessions 切换到 Projects。
+1. 通过记得的“阿特拉斯发布”关键词搜索。
+2. 切换浅色与深色主题。
+3. 从“会话”切换到“项目”。
 4. 筛选 Claude，并预览打开会话的动作。
 
 ## AI Project Finder 的定位
@@ -40,11 +40,11 @@ AI Project Finder 将这些本地记录整理到一个搜索入口，便于定�
 
 索引保留在创建这些会话的电脑上。
 
-## Key Features
+## 核心功能
 
 ### 跨 AI 本地索引
 
-AI Project Finder 可以读取 Codex、Claude Code、Kimi Code，以及兼容的 Kimi Desktop Work 本地历史。对于浏览器工具和云端聊天，可以通过 manual trace 补充。
+AI Project Finder 可以读取 Codex、Claude Code、Kimi Code，以及兼容的 Kimi Desktop Work 本地历史。浏览器工具和云端聊天可以通过手工记录补充。
 
 默认自动识别：
 
@@ -66,9 +66,9 @@ Kimi Code    ~/.kimi-code/sessions 或 $KIMI_CODE_HOME/sessions
 
 搜索不区分大小写。输入多个关键词时，匹配结果需要包含全部关键词。
 
-### Sessions 与 Projects 视图
+### 会话与项目视图
 
-**Sessions** 展示单次会话。**Projects** 将同一项目线索下的多次 AI 处理记录聚合展示。
+**会话**展示单次对话。**项目**将同一项目线索下的多次 AI 处理记录聚合展示。
 
 结果还可以按 AI 来源、更新时间、相关度和新旧顺序筛选。
 
@@ -89,7 +89,7 @@ Kimi Code    ~/.kimi-code/sessions 或 $KIMI_CODE_HOME/sessions
 
 - macOS 或 Windows
 - Python 3.10 或更高版本
-- 至少一种受支持的本地 AI 历史，或手工添加的 trace
+- 至少一种受支持的本地 AI 历史，或手工添加的记录
 
 Python 应用只使用标准库，无需执行 `pip install`。
 
@@ -97,12 +97,12 @@ Python 应用只使用标准库，无需执行 `pip install`。
 
 ### macOS
 
-#### 下载 Release
+#### 下载发行版
 
-1. 下载并解压 [Latest release](https://github.com/stevensilu/ai-project-finder/releases/latest)。
+1. 下载并解压 [AI Project Finder 中文版 macOS 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_ZH_macOS_v1.2.0.zip)。
 2. 将文件夹移动到稳定位置，例如 `~/Applications/AI Project Finder`。
 3. 按住 Control 点击 `install.command`，选择 **打开**，完成首次运行确认。
-4. Dashboard 会在 `http://127.0.0.1:4388` 打开。
+4. 应用会在 `http://127.0.0.1:4388` 打开。
 
 安装器会创建：
 
@@ -118,6 +118,8 @@ Python 应用只使用标准库，无需执行 `pip install`。
 
 #### 通过 Git clone 安装
 
+仓库中的默认语言是英文。完成 clone 后，在安装前将 `config.json` 中的 `"locale"` 改为 `"zh-CN"`。
+
 ```bash
 git clone https://github.com/stevensilu/ai-project-finder.git
 cd ai-project-finder
@@ -127,12 +129,12 @@ chmod +x install.command start.command
 
 ### Windows
 
-#### 下载 Release
+#### 下载发行版
 
-1. 下载并解压 [Latest release](https://github.com/stevensilu/ai-project-finder/releases/latest)。
+1. 下载并解压 [AI Project Finder 中文版 Windows 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_ZH_Windows_v1.2.0.zip)。
 2. 将文件夹移动到稳定位置，例如 `%LOCALAPPDATA%\Programs\AI Project Finder`。
 3. 双击 `install.bat`。
-4. Dashboard 会在 `http://127.0.0.1:4388` 打开。
+4. 应用会在 `http://127.0.0.1:4388` 打开。
 
 安装器会创建：
 
@@ -140,9 +142,11 @@ chmod +x install.command start.command
 %LOCALAPPDATA%\AIProjectFinder\ai-project-finder.bat
 ```
 
-后续可以双击 `start.bat`，或使用上述本地 launcher。
+后续可以双击 `start.bat`，或使用上述本地启动器。
 
 #### 通过 Git clone 安装
+
+仓库中的默认语言是英文。完成 clone 后，在安装前将 `config.json` 中的 `"locale"` 改为 `"zh-CN"`。
 
 ```powershell
 git clone https://github.com/stevensilu/ai-project-finder.git
@@ -165,34 +169,36 @@ campaign-brief.pdf
 landing page localization
 ```
 
-输入过程中结果会实时更新。按 Enter 或点击 **Search** 后，页面会移动到第一条结果。
+输入过程中结果会实时更新。按回车键或点击**搜索**后，页面会移动到第一条结果。
+
+中文版安装包中的界面、安装提示、空状态和演示模式均使用中文。被索引的会话标题和摘要会保留原始语言。
 
 ### 缩小结果范围
 
 - 选择一个或多个 AI 来源。
-- 切换 **Sessions** 或 **Projects**。
+- 切换**会话**或**项目**。
 - 将更新时间限定为最近 30 天、90 天或一年。
 - 按相关度、最新或最早排序。
 
 ### 打开结果
 
-结果可能提供 **Open session**、**Open workspace**、**Open CLI**、**Copy path** 或 **Copy session**。可用动作会根据来源和客户端集成情况变化。
+结果可能提供**打开会话**、**打开工作区**、**打开命令行**、**复制路径**或**复制会话信息**。可用动作会根据来源和客户端集成情况变化。
 
 ### 添加浏览器端记录
 
-选择 **Add trace**，保存：
+选择**添加记录**，保存：
 
 - AI 工具
 - 项目或客户
-- Trace 标题
+- 记录标题
 - 会话链接或本地路径
 - 搜索关键词
 
-Manual traces 会写入 `data/manual.json`。第一次保存时会自动创建这个私有运行文件，并且该文件已排除在 Git 之外。仓库中的 `data/manual.example.json` 是空白示例。
+手工记录会写入 `data/manual.json`。第一次保存时会自动创建这个私有运行文件，并且该文件已排除在 Git 之外。仓库中的 `data/manual.example.json` 是空白示例。
 
 ### 刷新索引
 
-创建新会话、安装新的 AI 工具、移动会话目录或修改来源路径后，可以使用 **Refresh** 更新索引。
+创建新会话、安装新的 AI 工具、移动会话目录或修改来源路径后，可以使用**刷新**更新索引。
 
 ### 自定义来源路径
 
@@ -202,6 +208,7 @@ Manual traces 会写入 `data/manual.json`。第一次保存时会自动创建�
 {
   "port": 4388,
   "max_prompt_chars": 9000,
+  "locale": "zh-CN",
   "sources": {
     "codex": "auto",
     "claude": "auto",
@@ -252,7 +259,7 @@ AI Project Finder 围绕本地会话数据运行：
 
 生成的索引可能包含提示词摘要、文件名和工作目录。分享已安装的应用副本前，建议将 `data/` 目录视为私有数据并进行检查。
 
-Manual traces 可能包含私人链接或项目名称。`data/manual.json` 已明确排除在版本控制之外。
+手工记录可能包含私人链接或项目名称。`data/manual.json` 已明确排除在版本控制之外。
 
 界面所需的字体和动画文件已经打包在应用中。打开 dashboard 时不需要访问字体或动画 CDN。
 
@@ -264,12 +271,12 @@ Manual traces 可能包含私人链接或项目名称。`data/manual.json` 已�
 - 精确会话链接取决于各 AI 客户端公开的 URL scheme 与本地元数据。
 - Claude Desktop 映射适用于存在对应 Desktop metadata 的 Claude Code 会话，不索引普通 Claude 云端聊天。
 - Kimi Desktop Work 会在 macOS 和常见 Windows AppData 布局中识别内嵌的 Kimi Code runtime。目前会打开 Work 页面，暂时没有稳定的精确会话 deep link。
-- 普通 Kimi 云端或网页会话需要通过 manual trace 补充。
+- 普通 Kimi 云端或网页会话需要通过手工记录补充。
 - 移动或删除源会话文件后，旧结果可能需要刷新索引才能恢复正确状态。
-- 当前界面同时包含英文导航和部分中文辅助文案。
+- 英文版与中文版会统一应用生成的界面文案。已有 AI 会话中的内容会保留原始语言。
 - Windows 端可以使用通用 home-directory discovery 建立索引。单条会话的打开能力取决于对应 Windows 客户端与已注册的 protocol。
 
-## Troubleshooting
+## 故障排查
 
 ### 需要 Python 3.10 或更高版本
 
@@ -304,7 +311,7 @@ set AI_PROJECT_FINDER_PYTHON=C:\Path\To\python.exe
 
 1. 确认对应 AI 工具已经创建过本地会话。
 2. 检查默认路径或环境变量。
-3. 使用 **Refresh**。
+3. 使用**刷新**。
 4. 工具使用非标准目录时，在 `config.json` 中补充自定义路径。
 
 ### 会话无法打开
@@ -336,7 +343,7 @@ http://127.0.0.1:4388
 
 也可以在 `config.json` 中设置其他端口。
 
-## Roadmap
+## 后续规划
 
 正在考虑的方向：
 
@@ -344,17 +351,17 @@ http://127.0.0.1:4388
 - 更多本地 AI 历史适配器
 - 在客户端提供稳定接口后改善会话级 deep link
 - 可选的 semantic 与 fuzzy search
-- Manual traces 的导入与导出
-- 完整的中英文 localization
+- 手工记录的导入与导出
+- 更多界面语言
 - 更完整的 Windows 与 Linux 集成
 
-Roadmap 中的内容仍在评估，暂未承诺发布时间。
+后续规划中的内容仍在评估，暂未承诺发布时间。
 
-## Contributing
+## 参与贡献
 
 欢迎提交 issue 与 pull request。
 
-Issue 中建议避免附加生成的 index、open log、manual trace、包含客户名称的截图或真实 session transcript。Parser contribution 与 bug report 可以优先使用 synthetic fixture。
+提交问题时，建议避免附加生成的索引、打开日志、手工记录、包含客户名称的截图或真实会话记录。解析器改进与缺陷报告可以优先使用合成测试数据。
 
 开发命令：
 
@@ -365,6 +372,6 @@ python3 app.py --demo
 python3 -m unittest discover -s tests
 ```
 
-## License
+## 许可证
 
-MIT License，详见 [LICENSE](LICENSE)。
+采用 MIT 许可证，详见 [LICENSE](LICENSE)。
