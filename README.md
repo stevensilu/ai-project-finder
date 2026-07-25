@@ -29,7 +29,14 @@ The index stays on the computer where the sessions were created.
 
 This 26-second walkthrough runs in an isolated Demo Mode with fictional projects and synthetic AI histories. It does not read local sessions, indexes, paths, or manual traces.
 
-https://github.com/user-attachments/assets/90987933-89ad-4611-b2f4-988f670b4376
+![AI Project Finder English demo preview](docs/demo-poster-en.png)
+
+<details>
+<summary>Play the 26-second demo</summary>
+
+https://github.com/user-attachments/assets/ce656b89-397f-448e-8469-46d65905cca3
+
+</details>
 
 The walkthrough covers:
 

@@ -29,7 +29,14 @@ AI Project Finder 将这些本地记录整理到一个搜索入口，便于定�
 
 这段约 26 秒的中文版演示在完全隔离的演示模式中运行，使用虚构项目与合成 AI 历史，不会读取本地会话、索引、路径或手工记录。
 
-https://github.com/user-attachments/assets/e36ceb46-5061-4ccd-af18-5acbfb27afca
+![AI Project Finder 中文版演示预览](docs/demo-poster-zh.png)
+
+<details>
+<summary>播放 26 秒演示</summary>
+
+https://github.com/user-attachments/assets/193f0c7a-6d1f-4fbf-a9d9-be2834b9ce15
+
+</details>
 
 演示内容包括：
 
