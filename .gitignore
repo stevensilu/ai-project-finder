@@ -2,9 +2,11 @@ __pycache__/
 .DS_Store
 .venv/
 data/index.json
+data/manual.json
 data/open.log
 data/open.previous.log
 data/open-kimi-session.command
+data/open-kimi-session.cmd
 data/*.tmp
 outputs/
 backups/
