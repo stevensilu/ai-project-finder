@@ -13,21 +13,6 @@ Search by project, client, prompt fragment, workspace, or filename, then return 
 
 > Current status: v1.2.0 with separate English and Chinese editions for macOS and Windows.
 
-## Demo
-
-This 26-second walkthrough runs in an isolated Demo Mode with fictional projects and synthetic AI histories. It does not read local sessions, indexes, paths, or manual traces.
-
-[![AI Project Finder English demo](docs/demo-poster-en.png)](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_Demo_EN_v1.2.0.mp4)
-
-[Watch the English demo MP4](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_Demo_EN_v1.2.0.mp4)
-
-The walkthrough covers:
-
-1. Searching for `Atlas Launch` from a remembered keyword.
-2. Switching between light and dark themes.
-3. Moving from Sessions to Projects.
-4. Filtering to Claude and previewing the open-session action.
-
 ## Why AI Project Finder
 
 AI work is often distributed across several tools. A research thread may begin in Claude, continue in Codex, and finish in Kimi. Weeks later, the useful clue may be a client name, a file such as `launch-plan.xlsx`, or one sentence from the original request.
@@ -39,6 +24,19 @@ AI Project Finder creates one searchable view of those local histories. It helps
 - The project folder or output file connected to it.
 
 The index stays on the computer where the sessions were created.
+
+## Demo
+
+This 26-second walkthrough runs in an isolated Demo Mode with fictional projects and synthetic AI histories. It does not read local sessions, indexes, paths, or manual traces.
+
+https://github.com/user-attachments/assets/90987933-89ad-4611-b2f4-988f670b4376
+
+The walkthrough covers:
+
+1. Searching for `Atlas Launch` from a remembered keyword.
+2. Switching between light and dark themes.
+3. Moving from Sessions to Projects.
+4. Filtering to Claude and previewing the open-session action.
 
 ## Key Features
 

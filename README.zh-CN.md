@@ -13,21 +13,6 @@
 
 > 当前状态：v1.2.0，提供独立的英文版与中文版，均支持 macOS 与 Windows。
 
-## 演示
-
-这段约 26 秒的中文版演示在完全隔离的演示模式中运行，使用虚构项目与合成 AI 历史，不会读取本地会话、索引、路径或手工记录。
-
-[![AI Project Finder 中文版演示](docs/demo-poster-zh.png)](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_Demo_ZH_v1.2.0.mp4)
-
-[观看中文版演示 MP4](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_Demo_ZH_v1.2.0.mp4)
-
-演示内容包括：
-
-1. 通过记得的“阿特拉斯发布”关键词搜索。
-2. 切换浅色与深色主题。
-3. 从“会话”切换到“项目”。
-4. 筛选 Claude，并预览打开会话的动作。
-
 ## AI Project Finder 的定位
 
 同一项工作可能分布在多个 AI 工具中。研究从 Claude 开始，代码在 Codex 中继续，最后由 Kimi 补充处理。过一段时间后，仍然容易记得的线索通常是客户名称、`launch-plan.xlsx` 这样的文件名，或原始需求中的一句话。
@@ -39,6 +24,19 @@ AI Project Finder 将这些本地记录整理到一个搜索入口，便于定�
 - 与该会话关联的项目目录或产出文件。
 
 索引保留在创建这些会话的电脑上。
+
+## 演示
+
+这段约 26 秒的中文版演示在完全隔离的演示模式中运行，使用虚构项目与合成 AI 历史，不会读取本地会话、索引、路径或手工记录。
+
+https://github.com/user-attachments/assets/e36ceb46-5061-4ccd-af18-5acbfb27afca
+
+演示内容包括：
+
+1. 通过记得的“阿特拉斯发布”关键词搜索。
+2. 切换浅色与深色主题。
+3. 从“会话”切换到“项目”。
+4. 筛选 Claude，并预览打开会话的动作。
 
 ## 核心功能
 
