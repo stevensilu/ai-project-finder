@@ -1,6 +1,12 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "APF_ZH="
+findstr /I /R /C:"locale.*zh" config.json >nul 2>&1
+if not errorlevel 1 (
+  set "APF_ZH=1"
+  chcp 65001 >nul
+)
 
 if defined AI_PROJECT_FINDER_PYTHON (
   if exist "%AI_PROJECT_FINDER_PYTHON%" (
@@ -27,8 +33,13 @@ if not errorlevel 1 (
   if not errorlevel 1 goto run_python3
 )
 
-echo AI Project Finder needs Python 3.10 or newer.
-echo Download Python from https://www.python.org/downloads/windows/ and run this file again.
+if defined APF_ZH (
+  echo AI Project Finder 需要 Python 3.10 或更高版本。
+  echo 可以从 https://www.python.org/downloads/windows/ 下载，然后重新运行此文件。
+) else (
+  echo AI Project Finder needs Python 3.10 or newer.
+  echo Download Python from https://www.python.org/downloads/windows/ and run this file again.
+)
 pause
 exit /b 1
 

@@ -1,6 +1,7 @@
 {
   "port": 4388,
   "max_prompt_chars": 9000,
+  "locale": "en",
   "sources": {
     "codex": "auto",
     "claude": "auto",
