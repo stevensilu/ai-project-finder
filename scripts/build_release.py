@@ -51,14 +51,19 @@ def configure_edition(root: Path, locale: str, platform: str) -> None:
         encoding="utf-8",
     )
 
-    if locale == "zh-CN":
-        (root / "README.md").write_text(
-            (root / "README.zh-CN.md").read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-        (root / "README.zh-CN.md").unlink()
-    else:
-        (root / "README.zh-CN.md").unlink()
+    readme_path = root / "README.md"
+    readme_text = (
+        (root / "README.zh-CN.md").read_text(encoding="utf-8")
+        if locale == "zh-CN"
+        else readme_path.read_text(encoding="utf-8")
+    )
+    readme_text = readme_text.replace(
+        "[English](README.md) · [简体中文](README.zh-CN.md)\n\n",
+        "",
+        1,
+    )
+    readme_path.write_text(readme_text, encoding="utf-8")
+    (root / "README.zh-CN.md").unlink()
 
     if platform == "macOS":
         for name in ("install.bat", "start.bat"):
