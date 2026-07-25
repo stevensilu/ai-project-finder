@@ -1,0 +1,10 @@
+{
+  "port": 4388,
+  "max_prompt_chars": 9000,
+  "sources": {
+    "codex": "auto",
+    "claude": "auto",
+    "kimi": "auto",
+    "kimi-desktop": "auto"
+  }
+}

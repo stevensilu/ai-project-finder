@@ -1,0 +1,10 @@
+__pycache__/
+.DS_Store
+.venv/
+data/index.json
+data/open.log
+data/open.previous.log
+data/open-kimi-session.command
+data/*.tmp
+outputs/
+backups/
