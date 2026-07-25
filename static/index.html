@@ -8,7 +8,10 @@
     (() => {
       const root = document.documentElement;
       root.classList.add("theme-init");
-      root.dataset.theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      const requestedTheme = new URLSearchParams(window.location.search).get("theme");
+      root.dataset.theme = ["light", "dark"].includes(requestedTheme)
+        ? requestedTheme
+        : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       window.addEventListener("DOMContentLoaded", () => {
         window.requestAnimationFrame(() => window.requestAnimationFrame(() => root.classList.remove("theme-init")));
       }, {once:true});
@@ -17,9 +20,7 @@
   <title>AI Project Finder · Local Trace Index</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/vendor/fonts/fonts.css">
   <noscript><style>.tech-reveal{opacity:1!important;clip-path:none!important}</style></noscript>
   <style>
     :root {
@@ -85,6 +86,12 @@
     .brand { display: flex; align-items: center; gap: 14px; }
     .brand-mark { width: 11px; height: 11px; background: currentColor; }
     .brand-copy { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; white-space: nowrap; }
+    .demo-badge {
+      display: inline-flex; align-items: center; min-height: 24px; padding: 4px 8px;
+      border: 1px solid var(--red); color: var(--red); font-size: 8px;
+      letter-spacing: .14em; line-height: 1; text-transform: uppercase;
+    }
+    .demo-badge[hidden] { display: none; }
     .top-actions { display: flex; align-items: center; gap: 8px; }
     .top-button {
       border: 1px solid var(--line); background: transparent; color: inherit;
@@ -279,7 +286,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy">AI PROJECT FINDER <span class="suffix">/ LOCAL INDEX © 2026</span></span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy">AI PROJECT FINDER <span class="suffix">/ LOCAL INDEX © 2026</span></span><span class="demo-badge" id="demoBadge" hidden>Demo data</span></div>
     <div class="top-actions">
       <button class="top-button" id="addButton" type="button">＋ <span class="top-action-label">Add trace</span></button>
       <button class="top-button" id="refreshButton" type="button">↻ <span class="top-action-label">Refresh</span></button>
@@ -369,7 +376,7 @@
       </div>
       <div class="form-grid">
         <div class="field"><label for="manualSource">AI tool</label><input id="manualSource" name="source" placeholder="ChatGPT" required></div>
-        <div class="field"><label for="manualProject">Project / Client</label><input id="manualProject" name="project" placeholder="Petlibro QBR"></div>
+        <div class="field"><label for="manualProject">Project / Client</label><input id="manualProject" name="project" placeholder="Atlas Launch"></div>
         <div class="field full"><label for="manualTitle">Trace title</label><input id="manualTitle" name="title" placeholder="一句话描述这次处理" required></div>
         <div class="field full"><label for="manualLocation">Link or local path</label><input id="manualLocation" name="location" placeholder="会话链接、项目文件夹或产出路径"></div>
         <div class="field full"><label for="manualNotes">Search keywords</label><textarea id="manualNotes" name="notes" placeholder="需求、结果或便于未来搜索的关键词"></textarea></div>
@@ -379,12 +386,12 @@
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
+  <script src="/vendor/js/gsap.min.js"></script>
+  <script src="/vendor/js/ScrollTrigger.min.js"></script>
   <script>
     const state = {
       records: [], summary: {}, generatedAt: null, query: "", sources: new Set(),
-      view: "sessions", range: "all", sort: "relevance"
+      view: "sessions", range: "all", sort: "relevance", demo: false
     };
     const labels = { codex: "Codex", claude: "Claude", kimi: "Kimi Code", "kimi-desktop": "Kimi Desktop", other: "Other" };
     const root = document.documentElement;
@@ -596,6 +603,10 @@
       state.records = payload.records || [];
       state.summary = payload.summary || {};
       state.generatedAt = payload.generated_at;
+      state.demo = Boolean(payload.demo);
+      $("#demoBadge").hidden = !state.demo;
+      $("#addButton").hidden = state.demo;
+      document.body.dataset.demo = state.demo ? "true" : "false";
       renderSources(); renderStats(); render();
       if (hasGsap) window.ScrollTrigger.refresh();
     }
@@ -643,7 +654,8 @@
           throw error;
         }
         const messages = {codex:"OPENING CODEX", claude:"OPENING CLAUDE", "kimi-web":"OPENING KIMI WEB", "kimi-cli":"OPENING KIMI CLI", "kimi-desktop":"OPENING KIMI DESKTOP", workspace:"OPENING WORKSPACE", web:"OPENING WEB SESSION", local:"OPENING LOCAL TRACE"};
-        toast(messages[payload.mode] || "OPENING SESSION");
+        const message = messages[payload.mode] || "OPENING SESSION";
+        toast(payload.demo ? `DEMO · ${message.replace("OPENING", "WOULD OPEN")}` : message);
       } catch (error) {
         if (error.code === "target_unavailable" || error.code === "record_missing") {
           await loadIndex().catch(() => {});

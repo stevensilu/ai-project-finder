@@ -17,7 +17,7 @@ import time
 import uuid
 import webbrowser
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -32,6 +32,10 @@ INDEX_FILE = DATA_DIR / "index.json"
 MANUAL_FILE = DATA_DIR / "manual.json"
 OPEN_LOG_FILE = DATA_DIR / "open.log"
 CONFIG_FILE = APP_DIR / "config.json"
+DEMO_FIXTURE_FILE = APP_DIR / "demo" / "fixtures.json"
+DEMO_DEFAULT_PORT = 4390
+DEMO_MODE = False
+IS_WINDOWS = os.name == "nt"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "port": 4388,
@@ -46,8 +50,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 HOME_DIR = Path.home()
 HOME_PATTERN = re.escape(str(HOME_DIR))
+PATH_SEPARATOR_PATTERN = r"[\\/]"
 PATH_RE = re.compile(
-    rf"{HOME_PATTERN}/[^\n\r\"'<>]{{1,360}}?\.(?:html?|xlsx?|csv|pptx?|pdf|docx?|md|txt|json|png|jpe?g|gif|mp4|mov|zip|skill)",
+    rf"{HOME_PATTERN}{PATH_SEPARATOR_PATTERN}[^\n\r\"'<>]{{1,360}}?\.(?:html?|xlsx?|csv|pptx?|pdf|docx?|md|txt|json|png|jpe?g|gif|mp4|mov|zip|skill)",
     re.IGNORECASE,
 )
 INTERNAL_STORAGE_FILE_RE = re.compile(
@@ -95,7 +100,24 @@ def automatic_source_paths() -> dict[str, list[Path]]:
         "kimi": [kimi_home / "sessions"],
         "kimi-desktop": [],
     }
-    if os.name == "posix":
+    if IS_WINDOWS:
+        for variable in ("APPDATA", "LOCALAPPDATA"):
+            base = str(os.environ.get(variable) or "").strip()
+            if not base:
+                continue
+            for app_folder in ("kimi-desktop", "Kimi Desktop", "Kimi"):
+                paths["kimi-desktop"].append(
+                    Path(base)
+                    / app_folder
+                    / "daimon-share"
+                    / "daimon"
+                    / "runtime"
+                    / "kimi-code"
+                    / "home"
+                    / "sessions"
+                )
+        paths["kimi-desktop"] = list(dict.fromkeys(paths["kimi-desktop"]))
+    elif Path("/Applications").exists():
         paths["kimi-desktop"].append(
             HOME_DIR
             / "Library"
@@ -133,7 +155,116 @@ def resolved_source_paths(config: dict[str, Any]) -> dict[str, list[Path]]:
     return result
 
 
+def load_demo_payload() -> dict[str, Any]:
+    """Load synthetic records without touching local AI history or data files."""
+    try:
+        fixture = json.loads(DEMO_FIXTURE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("demo fixture unavailable") from exc
+    rows = fixture.get("records", []) if isinstance(fixture, dict) else []
+    if not isinstance(rows, list):
+        raise RuntimeError("demo fixture records must be a list")
+
+    now = datetime.now(tz=timezone.utc)
+    records: list[dict[str, Any]] = []
+    labels = {
+        "codex": "Codex",
+        "claude": "Claude",
+        "kimi": "Kimi Code",
+        "kimi-desktop": "Kimi Desktop",
+    }
+    for position, raw in enumerate(rows, start=1):
+        if not isinstance(raw, dict):
+            continue
+        source = str(raw.get("source") or "").strip().lower()
+        session_id = str(raw.get("session_id") or f"demo-{position:03d}").strip()
+        project = str(raw.get("project") or "Demo Project").strip()
+        title = str(raw.get("title") or project).strip()
+        if source not in labels or not SESSION_ID_RE.fullmatch(session_id):
+            raise RuntimeError(f"invalid demo record at position {position}")
+        try:
+            updated_hours = max(0.0, float(raw.get("updated_hours_ago", position)))
+            created_hours = max(updated_hours, float(raw.get("created_hours_ago", updated_hours + 2)))
+            message_count = max(1, int(raw.get("message_count", 1)))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"invalid demo timing at position {position}") from exc
+        updated_at = (now - timedelta(hours=updated_hours)).isoformat()
+        created_at = (now - timedelta(hours=created_hours)).isoformat()
+        cwd = str(raw.get("cwd") or f"~/Demo Workspaces/{project}").strip()
+        excerpt = str(raw.get("excerpt") or "").strip()
+        artifacts = [
+            str(item).strip()
+            for item in raw.get("artifacts", [])
+            if str(item).strip()
+        ] if isinstance(raw.get("artifacts", []), list) else []
+        record = {
+            "id": f"{source}:{session_id}",
+            "source": source,
+            "source_label": labels[source],
+            "session_id": session_id,
+            "session_path": f"demo://sessions/{session_id}",
+            "cwd": cwd,
+            "project": project,
+            "customer": "",
+            "title": title,
+            "excerpt": excerpt,
+            "artifacts": artifacts,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "message_count": message_count,
+            "origin": str(raw.get("origin") or labels[source]),
+            "search_text": " ".join(
+                [title, project, cwd, excerpt, *artifacts]
+            ).lower(),
+        }
+        if source == "kimi-desktop":
+            record["open_label"] = "Open Kimi Desktop ↗"
+        records.append(record)
+
+    records.sort(key=lambda item: str(item["updated_at"]), reverse=True)
+    counts = Counter(str(item["source"]) for item in records)
+    projects = {str(item["project"]) for item in records if item.get("project")}
+    return {
+        "demo": True,
+        "generated_at": now.isoformat(),
+        "records": records,
+        "summary": {
+            "records": len(records),
+            "projects": len(projects),
+            "sources": dict(counts),
+            "errors": 0,
+            "available_sources": len(counts),
+        },
+        "source_status": {
+            source: {"available": True, "paths": [], "demo": True}
+            for source in counts
+        },
+        "warnings": [],
+    }
+
+
+def demo_open_mode(record: dict[str, Any], action: str) -> str:
+    """Return a display-only open mode and never invoke a system application."""
+    if action == "workspace":
+        return "workspace"
+    source = str(record.get("source") or "").strip().lower()
+    if action == "cli":
+        if source != "kimi":
+            raise ValueError("CLI open is only available for Kimi Code sessions")
+        return "kimi-cli"
+    if action != "session":
+        raise ValueError("unsupported action")
+    return {
+        "codex": "codex",
+        "claude": "claude",
+        "kimi": "kimi-web",
+        "kimi-desktop": "kimi-desktop",
+    }.get(source, "local")
+
+
 def load_index_payload() -> dict[str, Any]:
+    if DEMO_MODE:
+        return load_demo_payload()
     if not INDEX_FILE.exists():
         return build_index()
     try:
@@ -156,6 +287,8 @@ def find_indexed_record(record_id: str) -> dict[str, Any] | None:
 
 
 def system_open_command(target: str) -> list[str]:
+    if IS_WINDOWS:
+        return ["cmd.exe", "/d", "/s", "/c", "start", "", target]
     opener = "/usr/bin/open" if Path("/usr/bin/open").exists() else shutil.which("xdg-open")
     if not opener:
         raise FileNotFoundError("system opener unavailable")
@@ -192,8 +325,23 @@ def record_open_event(
 
 def claude_desktop_session_roots() -> list[tuple[str, Path]]:
     """Return observed Claude Desktop profiles, newest activity first."""
-    application_support = HOME_DIR / "Library" / "Application Support"
-    logs_root = HOME_DIR / "Library" / "Logs"
+    if IS_WINDOWS:
+        application_roots = [
+            Path(value)
+            for value in (
+                os.environ.get("APPDATA"),
+                os.environ.get("LOCALAPPDATA"),
+            )
+            if value
+        ]
+        profile_roots = [(root, root) for root in dict.fromkeys(application_roots)]
+    else:
+        profile_roots = [
+            (
+                HOME_DIR / "Library" / "Application Support",
+                HOME_DIR / "Library" / "Logs",
+            )
+        ]
     candidates: list[tuple[float, str, Path]] = []
     profile_names = ["Claude"]
     configured_profiles = [
@@ -202,30 +350,42 @@ def claude_desktop_session_roots() -> list[tuple[str, Path]]:
         if item.strip()
     ]
     profile_names.extend(configured_profiles)
-    try:
-        profile_names.extend(
-            path.name
-            for path in application_support.glob("Claude*")
-            if (path / "claude-code-sessions").is_dir()
-        )
-    except OSError:
-        pass
-    for profile in dict.fromkeys(profile_names):
-        sessions_root = application_support / profile / "claude-code-sessions"
-        if not sessions_root.is_dir():
-            continue
-        activity_times: list[float] = []
+    for application_support, logs_root in profile_roots:
+        discovered_profiles = list(profile_names)
         try:
-            activity_times.append(sessions_root.stat().st_mtime)
+            discovered_profiles.extend(
+                path.name
+                for path in application_support.glob("Claude*")
+                if (path / "claude-code-sessions").is_dir()
+            )
         except OSError:
             pass
-        try:
-            activity_times.extend(path.stat().st_mtime for path in (logs_root / profile).glob("main*.log"))
-        except OSError:
-            pass
-        candidates.append((max(activity_times, default=0.0), profile, sessions_root))
+        for profile in dict.fromkeys(discovered_profiles):
+            sessions_root = application_support / profile / "claude-code-sessions"
+            if not sessions_root.is_dir():
+                continue
+            activity_times: list[float] = []
+            try:
+                activity_times.append(sessions_root.stat().st_mtime)
+            except OSError:
+                pass
+            try:
+                activity_times.extend(
+                    path.stat().st_mtime
+                    for path in (logs_root / profile).glob("main*.log")
+                )
+            except OSError:
+                pass
+            candidates.append((max(activity_times, default=0.0), profile, sessions_root))
     candidates.sort(key=lambda item: item[0], reverse=True)
-    return [(profile, sessions_root) for _, profile, sessions_root in candidates]
+    unique: list[tuple[str, Path]] = []
+    seen: set[Path] = set()
+    for _, profile, sessions_root in candidates:
+        if sessions_root in seen:
+            continue
+        seen.add(sessions_root)
+        unique.append((profile, sessions_root))
+    return unique
 
 
 def active_claude_desktop_sessions_root() -> tuple[str, Path] | None:
@@ -280,10 +440,13 @@ def load_claude_desktop_session_map(*, all_profiles: bool = False) -> dict[str, 
 
 def kimi_binary() -> Path:
     kimi_home = environment_home("KIMI_CODE_HOME", HOME_DIR / ".kimi-code")
-    for candidate in (
-        kimi_home / "bin" / "kimi",
-        HOME_DIR / ".local" / "bin" / "kimi",
-    ):
+    executable_names = ("kimi.exe", "kimi") if IS_WINDOWS else ("kimi",)
+    candidates = [
+        directory / executable
+        for directory in (kimi_home / "bin", HOME_DIR / ".local" / "bin")
+        for executable in executable_names
+    ]
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
     discovered = shutil.which("kimi")
@@ -345,14 +508,24 @@ def ensure_kimi_web_origin() -> str:
 
 def kimi_cli_launcher(session_id: str) -> Path:
     binary = kimi_binary()
-    launcher = DATA_DIR / "open-kimi-session.command"
-    command = (
-        "#!/bin/zsh\n"
-        f"exec {shlex.quote(str(binary))} --session {shlex.quote(session_id)}\n"
-    )
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if IS_WINDOWS:
+        launcher = DATA_DIR / "open-kimi-session.cmd"
+        escaped_binary = str(binary).replace('"', '""')
+        escaped_session = session_id.replace('"', '""')
+        command = (
+            "@echo off\n"
+            f'"{escaped_binary}" --session "{escaped_session}"\n'
+        )
+    else:
+        launcher = DATA_DIR / "open-kimi-session.command"
+        command = (
+            "#!/bin/zsh\n"
+            f"exec {shlex.quote(str(binary))} --session {shlex.quote(session_id)}\n"
+        )
     launcher.write_text(command, encoding="utf-8")
-    launcher.chmod(0o700)
+    if not IS_WINDOWS:
+        launcher.chmod(0o700)
     return launcher
 
 
@@ -840,6 +1013,8 @@ def load_manual() -> list[dict[str, Any]]:
 
 
 def build_index() -> dict[str, Any]:
+    if DEMO_MODE:
+        return load_demo_payload()
     config = load_config()
     max_chars = int(config.get("max_prompt_chars", 9000))
     source_paths = resolved_source_paths(config)
@@ -968,7 +1143,11 @@ class FinderHandler(SimpleHTTPRequestHandler):
             self.send_json(load_index_payload())
             return
         if parsed.path == "/api/health":
-            self.send_json({"ok": True, "index_exists": INDEX_FILE.exists()})
+            self.send_json({
+                "ok": True,
+                "demo": DEMO_MODE,
+                "index_exists": True if DEMO_MODE else INDEX_FILE.exists(),
+            })
             return
         if parsed.path == "/":
             self.path = "/index.html"
@@ -986,8 +1165,13 @@ class FinderHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/reindex":
             try:
-                payload = build_index()
-                self.send_json({"ok": True, "summary": payload["summary"], "generated_at": payload["generated_at"]})
+                payload = load_demo_payload() if DEMO_MODE else build_index()
+                self.send_json({
+                    "ok": True,
+                    "demo": DEMO_MODE,
+                    "summary": payload["summary"],
+                    "generated_at": payload["generated_at"],
+                })
             except Exception as exc:
                 self.send_json({"ok": False, "error": type(exc).__name__}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -999,8 +1183,8 @@ class FinderHandler(SimpleHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "record not found"}, HTTPStatus.NOT_FOUND)
                 return
             try:
-                mode = launch_record(record, action)
-                self.send_json({"ok": True, "mode": mode})
+                mode = demo_open_mode(record, action) if DEMO_MODE else launch_record(record, action)
+                self.send_json({"ok": True, "demo": DEMO_MODE, "mode": mode})
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except FileNotFoundError as exc:
@@ -1020,6 +1204,16 @@ class FinderHandler(SimpleHTTPRequestHandler):
                 )
             return
         if parsed.path == "/api/manual":
+            if DEMO_MODE:
+                self.send_json(
+                    {
+                        "ok": False,
+                        "error": "demo mode is read only",
+                        "error_code": "demo_read_only",
+                    },
+                    HTTPStatus.FORBIDDEN,
+                )
+                return
             row = self.read_body_json()
             if not str(row.get("title") or "").strip():
                 self.send_json({"ok": False, "error": "title is required"}, HTTPStatus.BAD_REQUEST)
@@ -1037,21 +1231,34 @@ class FinderHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
+    global DEMO_MODE
     parser = argparse.ArgumentParser(description="AI Project Finder local dashboard")
     parser.add_argument("--build-only", action="store_true", help="refresh index and exit")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--open", action="store_true", help="open the dashboard in the default browser")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="run with synthetic demo data on port 4390; no local sources are read",
+    )
     args = parser.parse_args()
+    DEMO_MODE = bool(args.demo)
 
     if args.build_only:
-        payload = build_index()
+        payload = load_demo_payload() if DEMO_MODE else build_index()
         print(
             f"Indexed {payload['summary']['records']} sessions across "
             f"{payload['summary']['projects']} project clues."
         )
         return
 
-    if not INDEX_FILE.exists():
+    if DEMO_MODE:
+        payload = load_demo_payload()
+        print(
+            f"Loaded {payload['summary']['records']} synthetic sessions across "
+            f"{payload['summary']['projects']} demo projects."
+        )
+    elif not INDEX_FILE.exists():
         payload = build_index()
         print(
             f"Indexed {payload['summary']['records']} sessions across "
@@ -1060,8 +1267,8 @@ def main() -> None:
     else:
         threading.Thread(target=build_index, daemon=True, name="index-refresh").start()
 
-    config = load_config()
-    port = args.port or int(config.get("port", 4388))
+    config = {} if DEMO_MODE else load_config()
+    port = args.port or (DEMO_DEFAULT_PORT if DEMO_MODE else int(config.get("port", 4388)))
     url = f"http://127.0.0.1:{port}"
     try:
         server = ThreadingHTTPServer(("127.0.0.1", port), FinderHandler)
