@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -110,6 +111,31 @@ class AutomaticPathsTest(unittest.TestCase):
         self.assertEqual(launcher.suffix, ".cmd")
         self.assertIn('"demo-session-001"', contents)
         self.assertIn("kimi.exe", contents)
+
+
+class VersionConsistencyTest(unittest.TestCase):
+    """Keep one release number, so the Server header cannot drift from the README."""
+
+    def readme_paths(self) -> list[Path]:
+        root = Path(__file__).resolve().parents[1]
+        return [root / "README.md", root / "README.zh-CN.md"]
+
+    def test_the_server_header_states_the_release(self) -> None:
+        self.assertEqual(app.FinderHandler.server_version, f"AIProjectFinder/{app.APP_VERSION}")
+
+    def test_both_readmes_state_the_current_release(self) -> None:
+        for path in self.readme_paths():
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(f"v{app.APP_VERSION}", text.splitlines()[13], path.name)
+
+    def test_download_links_point_at_the_current_release(self) -> None:
+        for path in self.readme_paths():
+            text = path.read_text(encoding="utf-8")
+            links = re.findall(r"/releases/download/(v[\d.]+)/(\S+?\.zip)", text)
+            self.assertTrue(links, f"{path.name} lists no download links")
+            for tag, archive in links:
+                self.assertEqual(tag, f"v{app.APP_VERSION}", path.name)
+                self.assertIn(f"_v{app.APP_VERSION}.zip", archive, path.name)
 
 
 class KimiDesktopParserTest(unittest.TestCase):

@@ -28,6 +28,11 @@ from typing import Any, Iterable
 from urllib.parse import parse_qs, quote, urlparse
 
 
+# One place to state the release. README badges, the packaged archives, and the
+# Server header all read from here, which is how server_version drifted to 1.0
+# while the published releases were on 1.2.0.
+APP_VERSION = "1.3.0"
+
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 DATA_DIR = APP_DIR / "data"
@@ -1448,7 +1453,7 @@ def build_index_now() -> dict[str, Any]:
 
 
 class FinderHandler(SimpleHTTPRequestHandler):
-    server_version = "AIProjectFinder/1.0"
+    server_version = f"AIProjectFinder/{APP_VERSION}"
     sys_version = ""
     issue_session_cookie = False
 

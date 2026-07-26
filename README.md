@@ -11,7 +11,7 @@ Search by project, client, prompt fragment, workspace, or filename, then return 
 ![Data](https://img.shields.io/badge/data-local_only-111111)
 ![License](https://img.shields.io/badge/license-MIT-111111)
 
-> Current status: v1.2.0 with separate English and Chinese editions for macOS and Windows.
+> Current status: v1.3.0 with separate English and Chinese editions for macOS and Windows.
 
 ## Why AI Project Finder
 
@@ -106,7 +106,7 @@ The Python application uses only the standard library. No `pip install` step is 
 
 #### Release download
 
-1. Download and unzip [AI Project Finder — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_EN_macOS_v1.2.0.zip).
+1. Download and unzip [AI Project Finder — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_macOS_v1.3.0.zip).
 2. Move the folder to a stable location, such as `~/Applications/AI Project Finder`.
 3. Control-click `install.command`, select **Open**, and approve the first launch.
 4. The dashboard opens at `http://127.0.0.1:4388`.
@@ -136,7 +136,7 @@ chmod +x install.command start.command
 
 #### Release download
 
-1. Download and unzip [AI Project Finder — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_EN_Windows_v1.2.0.zip).
+1. Download and unzip [AI Project Finder — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_Windows_v1.3.0.zip).
 2. Move the folder to a stable location, such as `%LOCALAPPDATA%\Programs\AI Project Finder`.
 3. Double-click `install.bat`.
 4. The dashboard opens at `http://127.0.0.1:4388`.
