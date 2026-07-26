@@ -918,8 +918,14 @@ class ManualTraceEndpointTest(unittest.TestCase):
             patcher = patch.object(app, attribute, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Naming every source keeps the build inside this temporary directory.
+        # An empty mapping falls through to automatic discovery, which reads the
+        # real local history: slow, and not this test's business.
+        absent_sources = {
+            name: str(root / "absent") for name in ("codex", "claude", "kimi", "kimi-desktop")
+        }
         for attribute, value in (
-            ("load_config", {"sources": {}, "max_prompt_chars": 9000}),
+            ("load_config", {"sources": absent_sources, "max_prompt_chars": 9000}),
             ("INDEX_CACHE", {"key": None, "payload": None}),
         ):
             patcher = (
