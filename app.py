@@ -13,6 +13,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -95,17 +96,43 @@ CONTENT_SECURITY_POLICY = (
     "frame-ancestors 'none'"
 )
 NON_USER_CODEX_THREAD_SOURCES = {"subagent", "automation"}
-GENERIC_DIRS = {
-    HOME_DIR.name.lower(),
-    "xia",
-    "new-chat",
-    "new-chat-2",
-    "new-chat-3",
-    "documents",
-    "downloads",
-    "desktop",
-    "coworkos",
+
+# Folder conventions differ per person, so project naming reads them from
+# config.json rather than carrying one contributor's layout in the source.
+DEFAULT_NAMING: dict[str, list[str]] = {
+    # A folder whose next segment names the project, e.g. .../projects/atlas.
+    "project_markers": ["projects"],
+    # A folder whose next segment names a client. A numbered prefix is allowed,
+    # so a marker of "客户" also matches a folder named "1.1 客户".
+    "client_markers": ["clients", "客户"],
+    # A workspace that files work under a date folder, e.g. .../codex/2026-07-25/atlas.
+    "dated_workspace_markers": ["codex"],
+    # Folder names too generic to be a project name on their own. Keep this
+    # list short: what follows is a guess from the request text, which is less
+    # stable than a dull but consistent folder name.
+    "ignore_dirs": [
+        "documents",
+        "downloads",
+        "desktop",
+        "tmp",
+        "new-chat",
+        "new-chat-2",
+        "new-chat-3",
+    ],
 }
+NAMING_RULES: dict[str, list[str]] = {
+    key: list(value) for key, value in DEFAULT_NAMING.items()
+}
+
+# Reading the index from memory while the file is unchanged, and reusing parsed
+# records for transcripts that have not changed, keeps both an open action and a
+# refresh off the full-rescan path.
+INDEX_CACHE: dict[str, Any] = {"key": None, "payload": None}
+INDEX_CACHE_LOCK = threading.Lock()
+BUILD_LOCK = threading.Lock()
+PARSE_CACHE_FILE = DATA_DIR / "parse-cache.json"
+# Bump when a parser changes what it extracts, so stale entries are discarded.
+PARSE_CACHE_VERSION = 2
 
 
 def environment_home(name: str, default: Path) -> Path:
@@ -261,9 +288,6 @@ def load_demo_payload() -> dict[str, Any]:
             "updated_at": updated_at,
             "message_count": message_count,
             "origin": str(localized.get("origin") or raw.get("origin") or labels[source]),
-            "search_text": " ".join(
-                [title, project, cwd, excerpt, *artifacts]
-            ).lower(),
         }
         if source == "kimi-desktop":
             record["open_label"] = "Open Kimi Desktop ↗"
@@ -311,16 +335,43 @@ def demo_open_mode(record: dict[str, Any], action: str) -> str:
     }.get(source, "local")
 
 
+def cache_index_payload(payload: dict[str, Any]) -> None:
+    try:
+        stat = INDEX_FILE.stat()
+    except OSError:
+        return
+    with INDEX_CACHE_LOCK:
+        INDEX_CACHE["key"] = (stat.st_mtime_ns, stat.st_size)
+        INDEX_CACHE["payload"] = payload
+
+
 def load_index_payload() -> dict[str, Any]:
+    """Serve the index from memory while the file on disk is unchanged.
+
+    Opening a result used to re-read and re-parse the whole index, which grows
+    with the number of indexed sessions.
+    """
     if DEMO_MODE:
         return load_demo_payload()
-    if not INDEX_FILE.exists():
+    try:
+        stat = INDEX_FILE.stat()
+    except OSError:
         return build_index()
+    key = (stat.st_mtime_ns, stat.st_size)
+    with INDEX_CACHE_LOCK:
+        cached = INDEX_CACHE["payload"]
+        if INDEX_CACHE["key"] == key and isinstance(cached, dict):
+            return cached
     try:
         payload = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else build_index()
     except (OSError, json.JSONDecodeError):
         return build_index()
+    if not isinstance(payload, dict):
+        return build_index()
+    with INDEX_CACHE_LOCK:
+        INDEX_CACHE["key"] = key
+        INDEX_CACHE["payload"] = payload
+    return payload
 
 
 def find_indexed_record(record_id: str) -> dict[str, Any] | None:
@@ -777,6 +828,45 @@ def iso_from_value(value: Any, fallback: float | None = None) -> str:
     return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
 
 
+def resolve_naming_rules(config: dict[str, Any]) -> dict[str, list[str]]:
+    configured = config.get("naming", {})
+    if not isinstance(configured, dict):
+        configured = {}
+    rules: dict[str, list[str]] = {}
+    for key, default in DEFAULT_NAMING.items():
+        value = configured.get(key, default)
+        values = value if isinstance(value, list) else [value]
+        rules[key] = [str(item).strip() for item in values if str(item).strip()]
+    return rules
+
+
+def part_matches_marker(part: str, marker: str) -> bool:
+    """Match a folder against a marker, allowing a numbered prefix."""
+    lowered = str(part).strip().lower()
+    target = str(marker).strip().lower()
+    if not target:
+        return False
+    return lowered == target or lowered.endswith(f" {target}")
+
+
+def marker_position(parts: list[str], markers: list[str], *, last: bool = False) -> int:
+    positions = [
+        index
+        for index, part in enumerate(parts)
+        if any(part_matches_marker(part, marker) for marker in markers)
+    ]
+    if not positions:
+        return -1
+    return positions[-1] if last else positions[0]
+
+
+def is_ignored_dir(name: str) -> bool:
+    lowered = str(name).strip().lower()
+    if lowered == HOME_DIR.name.lower():
+        return True
+    return lowered in {item.lower() for item in NAMING_RULES.get("ignore_dirs", [])}
+
+
 def canonical_project(cwd: str, title: str) -> tuple[str, str]:
     normalized = cwd.rstrip("/")
     parts = [
@@ -786,34 +876,34 @@ def canonical_project(cwd: str, title: str) -> tuple[str, str]:
     ]
     customer = ""
 
-    if "projects" in parts:
-        index = len(parts) - 1 - parts[::-1].index("projects")
-        if index + 1 < len(parts):
-            return parts[index + 1], customer
+    project_at = marker_position(parts, NAMING_RULES.get("project_markers", []), last=True)
+    if project_at >= 0 and project_at + 1 < len(parts):
+        return parts[project_at + 1], customer
 
-    for marker in ("1.1 客户", "客户"):
-        if marker in parts:
-            index = parts.index(marker)
-            if index + 1 < len(parts):
-                customer = parts[index + 1]
-                tail = parts[index + 2 : index + 4]
-                return " · ".join([customer, *tail]) if tail else customer, customer
+    client_at = marker_position(parts, NAMING_RULES.get("client_markers", []))
+    if client_at >= 0 and client_at + 1 < len(parts):
+        customer = parts[client_at + 1]
+        tail = parts[client_at + 2 : client_at + 4]
+        return " · ".join([customer, *tail]) if tail else customer, customer
 
-    if "Codex" in parts:
-        index = parts.index("Codex")
-        tail = parts[index + 1 :]
+    dated_at = marker_position(parts, NAMING_RULES.get("dated_workspace_markers", []))
+    if dated_at >= 0:
+        tail = parts[dated_at + 1 :]
         if tail and DATE_PART_RE.match(tail[0]):
             tail = tail[1:]
-        if tail and tail[-1].lower() not in GENERIC_DIRS:
+        if tail and not is_ignored_dir(tail[-1]):
             return tail[-1], customer
 
     basename = Path(normalized).name if normalized else ""
-    if basename and basename.lower() not in GENERIC_DIRS:
+    if basename and not is_ignored_dir(basename):
         return basename, customer
 
+    # Nothing in the path names the work, so guess from the request text. When
+    # even that yields nothing the label stays empty and the interface names it
+    # in the reader's own language.
     hint = clean_user_text(title)
     words = re.findall(r"[A-Za-z][A-Za-z0-9._-]{2,}|[\u4e00-\u9fff]{2,12}", hint)
-    return " ".join(words[:4])[:64] or "未归类项目", customer
+    return " ".join(words[:4])[:64], customer
 
 
 def find_artifacts(text: str) -> list[str]:
@@ -868,7 +958,6 @@ def make_record(
         "updated_at": updated_at,
         "message_count": message_count,
         "origin": origin,
-        "search_text": " ".join([title, project, customer, cwd, excerpt, *artifacts]).lower(),
     }
 
 
@@ -913,7 +1002,7 @@ def parse_codex(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
     stat = path.stat()
     session_id = str(meta.get("id") or meta.get("session_id") or path.stem)
     cwd = str(meta.get("cwd") or "")
-    title = title_from_prompts(prompts, Path(cwd).name or "Codex 会话")
+    title = title_from_prompts(prompts, Path(cwd).name)
     return make_record(
         source="codex",
         session_id=session_id,
@@ -989,7 +1078,7 @@ def parse_claude(
     elif desktop_title:
         title, title_source = desktop_title, "desktop"
     else:
-        title = title_from_prompts(prompts, Path(cwd).name or "Claude 会话")
+        title = title_from_prompts(prompts, Path(cwd).name)
         title_source = "first-prompt"
     record = make_record(
         source="claude",
@@ -1018,7 +1107,7 @@ def parse_kimi(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
         return None
     if not isinstance(state, dict):
         return None
-    title = str(state.get("title") or state.get("lastPrompt") or "Kimi 会话")
+    title = str(state.get("title") or state.get("lastPrompt") or "")
     last_prompt = str(state.get("lastPrompt") or "")
     prompts = [title]
     if last_prompt and last_prompt != title:
@@ -1051,7 +1140,7 @@ def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | No
         return None
     if not isinstance(state, dict):
         return None
-    title = str(state.get("title") or state.get("lastPrompt") or "Kimi Desktop session")
+    title = str(state.get("title") or state.get("lastPrompt") or "")
     last_prompt = str(state.get("lastPrompt") or "")
     prompts = [title]
     if last_prompt and last_prompt != title:
@@ -1076,6 +1165,21 @@ def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | No
     return record
 
 
+def write_json_atomically(target: Path, payload: Any, *, prefix: str) -> None:
+    """Write through a unique temporary file so two writers cannot interleave."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    handle, temporary_name = tempfile.mkstemp(
+        dir=str(target.parent), prefix=prefix, suffix=".tmp"
+    )
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        os.replace(temporary_name, target)
+    except BaseException:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+
+
 def load_manual() -> list[dict[str, Any]]:
     if not MANUAL_FILE.exists():
         return []
@@ -1086,10 +1190,57 @@ def load_manual() -> list[dict[str, Any]]:
         return []
 
 
+def load_parse_cache(max_prompt_chars: int) -> dict[str, dict[str, Any]]:
+    """Return previously parsed records, or nothing when the cache cannot apply."""
+    try:
+        payload = json.loads(PARSE_CACHE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("version") != PARSE_CACHE_VERSION:
+        return {}
+    if int(payload.get("max_prompt_chars") or 0) != max_prompt_chars:
+        return {}
+    entries = payload.get("entries")
+    return entries if isinstance(entries, dict) else {}
+
+
+def store_parse_cache(
+    entries: dict[str, dict[str, Any]], max_prompt_chars: int
+) -> None:
+    payload = {
+        "version": PARSE_CACHE_VERSION,
+        "max_prompt_chars": max_prompt_chars,
+        "entries": entries,
+    }
+    try:
+        write_json_atomically(PARSE_CACHE_FILE, payload, prefix="parse-cache-")
+    except OSError:
+        pass
+
+
+def desktop_metadata_for(
+    record: dict[str, Any] | None, desktop_sessions: dict[str, dict[str, str]]
+) -> dict[str, str] | None:
+    """Claude records depend on Desktop metadata, which lives outside the file."""
+    if not record:
+        return None
+    return desktop_sessions.get(str(record.get("session_id") or "")) or None
+
+
 def build_index() -> dict[str, Any]:
     if DEMO_MODE:
         return load_demo_payload()
+    # One writer at a time: the startup refresh and a Refresh click can overlap.
+    with BUILD_LOCK:
+        return build_index_now()
+
+
+def build_index_now() -> dict[str, Any]:
     config = load_config()
+    global NAMING_RULES
+    NAMING_RULES = resolve_naming_rules(config)
     max_chars = int(config.get("max_prompt_chars", 9000))
     source_paths = resolved_source_paths(config)
     claude_desktop_sessions = load_claude_desktop_session_map(all_profiles=True)
@@ -1097,6 +1248,9 @@ def build_index() -> dict[str, Any]:
     errors: list[str] = []
     notices: list[str] = []
     source_status: dict[str, dict[str, Any]] = {}
+    previous_cache = load_parse_cache(max_chars)
+    fresh_cache: dict[str, dict[str, Any]] = {}
+    reused = 0
 
     adapters = {
         "codex": ("**/*.jsonl", parse_codex),
@@ -1120,12 +1274,31 @@ def build_index() -> dict[str, Any]:
             for path in root.glob(pattern):
                 if source == "claude" and "subagents" in path.parts:
                     continue
+                cache_key = str(path)
                 try:
-                    record = parser(path, max_chars)
+                    stat = path.stat()
+                    fingerprint = [stat.st_mtime_ns, stat.st_size]
+                    cached = previous_cache.get(cache_key)
+                    if (
+                        isinstance(cached, dict)
+                        and cached.get("stat") == fingerprint
+                        and cached.get("desktop")
+                        == desktop_metadata_for(cached.get("record"), claude_desktop_sessions)
+                    ):
+                        record = cached.get("record")
+                        reused += 1
+                    else:
+                        record = parser(path, max_chars)
+                    fresh_cache[cache_key] = {
+                        "stat": fingerprint,
+                        "record": record,
+                        "desktop": desktop_metadata_for(record, claude_desktop_sessions),
+                    }
                     if record:
                         records.append(record)
                 except Exception as exc:  # one damaged session must not block the index
                     errors.append(f"{source}: {path.name}: {type(exc).__name__}")
+    store_parse_cache(fresh_cache, max_chars)
 
     manual_rows = load_manual()
     for row in manual_rows:
@@ -1133,7 +1306,7 @@ def build_index() -> dict[str, Any]:
             continue
         source = str(row.get("source") or "other").lower()
         when = iso_from_value(row.get("updated_at"))
-        title = str(row.get("title") or "手工记录")
+        title = str(row.get("title") or "")
         cwd = str(row.get("location") or "")
         record = make_record(
             source=source,
@@ -1145,11 +1318,16 @@ def build_index() -> dict[str, Any]:
             created_at=when,
             updated_at=when,
             message_count=1,
-            origin="手工补录",
+            origin="",
         )
         if row.get("project"):
             record["project"] = str(row["project"])
-            record["search_text"] += " " + str(row["project"]).lower()
+        # Marked so the interface can offer edit and delete, and can label the
+        # origin in the reader's own language.
+        record["manual"] = True
+        record["manual_id"] = str(row.get("id") or "")
+        record["notes"] = str(row.get("notes") or "")
+        record["manual_source"] = str(row.get("source") or "")
         records.append(record)
 
     deduplicated: dict[str, dict[str, Any]] = {}
@@ -1185,11 +1363,10 @@ def build_index() -> dict[str, Any]:
         },
         "source_status": source_status,
         "warnings": [*errors, *notices][:30],
+        "reused_records": reused,
     }
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    temporary = INDEX_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    temporary.replace(INDEX_FILE)
+    write_json_atomically(INDEX_FILE, payload, prefix="index-")
+    cache_index_payload(payload)
     return payload
 
 
@@ -1353,10 +1530,14 @@ class FinderHandler(SimpleHTTPRequestHandler):
                 self.send_json(load_index_payload())
                 return
             if parsed.path == "/api/health":
+                # generated_at lets an open page notice that the refresh started
+                # at launch has finished, without polling the whole index.
+                payload = load_index_payload()
                 self.send_json({
                     "ok": True,
                     "demo": DEMO_MODE,
                     "index_exists": True if DEMO_MODE else INDEX_FILE.exists(),
+                    "generated_at": str(payload.get("generated_at") or ""),
                 })
                 return
             self.deny(HTTPStatus.NOT_FOUND, "unknown_endpoint", "unknown endpoint")
@@ -1434,7 +1615,7 @@ class FinderHandler(SimpleHTTPRequestHandler):
                     HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
             return
-        if parsed.path == "/api/manual":
+        if parsed.path in {"/api/manual", "/api/manual/update", "/api/manual/delete"}:
             if DEMO_MODE:
                 self.send_json(
                     {
@@ -1446,19 +1627,75 @@ class FinderHandler(SimpleHTTPRequestHandler):
                 )
                 return
             row = self.read_body_json()
-            if not str(row.get("title") or "").strip():
-                self.send_json({"ok": False, "error": "title is required"}, HTTPStatus.BAD_REQUEST)
-                return
-            manual = load_manual()
-            row["id"] = str(uuid.uuid4())
-            row["updated_at"] = row.get("updated_at") or datetime.now(tz=timezone.utc).isoformat()
-            manual.append(row)
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            MANUAL_FILE.write_text(json.dumps(manual, ensure_ascii=False, indent=2), encoding="utf-8")
-            payload = build_index()
-            self.send_json({"ok": True, "summary": payload["summary"]}, HTTPStatus.CREATED)
+            if parsed.path == "/api/manual":
+                self.create_manual_trace(row)
+            elif parsed.path == "/api/manual/update":
+                self.update_manual_trace(row)
+            else:
+                self.delete_manual_trace(row)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def save_manual_traces(self, rows: list[dict[str, Any]]) -> None:
+        write_json_atomically(MANUAL_FILE, rows, prefix="manual-")
+
+    def create_manual_trace(self, row: dict[str, Any]) -> None:
+        if not str(row.get("title") or "").strip():
+            self.send_json({"ok": False, "error": "title is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        manual = load_manual()
+        row["id"] = str(uuid.uuid4())
+        row["updated_at"] = row.get("updated_at") or datetime.now(tz=timezone.utc).isoformat()
+        manual.append(row)
+        self.save_manual_traces(manual)
+        payload = build_index()
+        self.send_json({"ok": True, "summary": payload["summary"]}, HTTPStatus.CREATED)
+
+    def update_manual_trace(self, row: dict[str, Any]) -> None:
+        trace_id = str(row.get("id") or "").strip()
+        if not str(row.get("title") or "").strip():
+            self.send_json({"ok": False, "error": "title is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        manual = load_manual()
+        position = next(
+            (
+                index
+                for index, item in enumerate(manual)
+                if isinstance(item, dict) and str(item.get("id") or "") == trace_id
+            ),
+            -1,
+        )
+        if not trace_id or position < 0:
+            self.send_json(
+                {"ok": False, "error": "trace not found", "error_code": "trace_missing"},
+                HTTPStatus.NOT_FOUND,
+            )
+            return
+        for field in ("source", "project", "title", "location", "notes"):
+            if field in row:
+                manual[position][field] = str(row.get(field) or "")
+        manual[position]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+        self.save_manual_traces(manual)
+        payload = build_index()
+        self.send_json({"ok": True, "summary": payload["summary"]})
+
+    def delete_manual_trace(self, row: dict[str, Any]) -> None:
+        trace_id = str(row.get("id") or "").strip()
+        manual = load_manual()
+        remaining = [
+            item
+            for item in manual
+            if not (isinstance(item, dict) and str(item.get("id") or "") == trace_id)
+        ]
+        if not trace_id or len(remaining) == len(manual):
+            self.send_json(
+                {"ok": False, "error": "trace not found", "error_code": "trace_missing"},
+                HTTPStatus.NOT_FOUND,
+            )
+            return
+        self.save_manual_traces(remaining)
+        payload = build_index()
+        self.send_json({"ok": True, "summary": payload["summary"]})
 
 
 def main() -> None:

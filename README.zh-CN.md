@@ -64,6 +64,15 @@ Kimi Code    ~/.kimi-code/sessions 或 $KIMI_CODE_HOME/sessions
 
 搜索不区分大小写。输入多个关键词时，匹配结果需要包含全部关键词。
 
+搜索框支持两种写法：
+
+```text
+"launch checklist"     作为完整短语匹配，而不是拆成多个词
+source:claude          只看某一个工具的会话
+```
+
+结果排序会参考关键词命中的位置，并让较新的会话稍微靠前。搜索词、来源筛选、视图、时间范围和排序方式都会同步到地址栏，刷新后仍在，也可以存成书签或在本机以链接形式打开。
+
 ### 会话与项目视图
 
 **会话**展示单次对话。**项目**将同一项目线索下的多次 AI 处理记录聚合展示。
@@ -192,11 +201,17 @@ landing page localization
 - 会话链接或本地路径
 - 搜索关键词
 
+已保存的记录会在结果卡片上带有**编辑**和**删除**两个动作，链接或标题写错了可以直接改，不必手动打开文件。删除需要再点一次确认。
+
 手工记录会写入 `data/manual.json`。第一次保存时会自动创建这个私有运行文件，并且该文件已排除在 Git 之外。仓库中的 `data/manual.example.json` 是空白示例。
 
 ### 刷新索引
 
 创建新会话、安装新的 AI 工具、移动会话目录或修改来源路径后，可以使用**刷新**更新索引。
+
+刷新只会重新读取自上次以来大小或时间戳发生变化的转写文件，通常在一秒以内完成。已解析的记录保存在 `data/parse-cache.json`，同样是排除在 Git 之外的私有运行文件；删除它会触发一次完整重读。
+
+启动时的那次刷新在后台进行。已经打开的 dashboard 会在它完成后自动更新列表。
 
 ### 自定义来源路径
 
@@ -244,6 +259,28 @@ macOS 上使用多个 Claude Desktop profile 时，可以设置：
 ```bash
 export AI_PROJECT_FINDER_CLAUDE_PROFILES="Claude,Claude-Work"
 ```
+
+### 项目命名
+
+记录的项目名来自它的工作目录路径。每个人的目录习惯不同，所以识别标记可以配置：
+
+```json
+{
+  "naming": {
+    "project_markers": ["projects"],
+    "client_markers": ["clients", "客户"],
+    "dated_workspace_markers": ["codex"],
+    "ignore_dirs": ["documents", "downloads", "desktop", "tmp", "new-chat"]
+  }
+}
+```
+
+- `project_markers`：该目录的下一层就是项目名，例如 `.../projects/atlas-launch`。
+- `client_markers`：该目录的下一层是客户名。允许编号前缀，所以 `客户` 也能匹配名为 `1.1 客户` 的文件夹。
+- `dated_workspace_markers`：按日期分层存放的工作区，例如 `.../codex/2026-07-25/atlas-launch`。
+- `ignore_dirs`：过于泛泛、不适合当项目名的文件夹。主目录始终按此处理。
+
+路径里取不到名字时，会从首条需求里推测；推测也为空时，界面显示「未归类项目」。
 
 ## 隐私与安全
 

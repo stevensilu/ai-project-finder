@@ -14,8 +14,11 @@
       window.__APF_LOCALE__ = requestedLocale.startsWith("zh") ? "zh-CN" : "en";
       root.lang = window.__APF_LOCALE__;
       root.dataset.locale = window.__APF_LOCALE__;
-      root.dataset.theme = ["light", "dark"].includes(requestedTheme)
-        ? requestedTheme
+      let storedTheme = null;
+      try { storedTheme = window.localStorage.getItem("apf-theme"); } catch (_) {}
+      const themes = ["light", "dark"];
+      root.dataset.theme = themes.includes(requestedTheme) ? requestedTheme
+        : themes.includes(storedTheme) ? storedTheme
         : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       window.addEventListener("DOMContentLoaded", () => {
         window.requestAnimationFrame(() => window.requestAnimationFrame(() => root.classList.remove("theme-init")));
@@ -240,6 +243,17 @@
     .form-button { border: 1px solid var(--ink); background: transparent; padding: 9px 14px; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
     .form-button.primary { background: var(--ink); color: var(--bg); }
     footer { display: flex; justify-content: space-between; gap: 18px; padding: 56px 0; color: var(--dim); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+    .title-open { display: block; width: 100%; border: 0; background: transparent; padding: 0; color: inherit; font: inherit; text-align: left; }
+    .title-open:hover { opacity: .7; }
+    .session-line.extra { display: none; }
+    .session-lines.expanded .session-line.extra { display: grid; }
+    .session-more, .show-more {
+      width: 100%; border: 1px solid var(--line); background: transparent; color: var(--dim);
+      padding: 10px 8px; font-size: 9px; letter-spacing: .12em; text-transform: uppercase;
+      transition: background .2s ease, color .2s ease;
+    }
+    .session-more:hover, .show-more:hover { background: var(--hover); color: var(--ink); }
+    .show-more { margin-top: 22px; }
     .tech-reveal { will-change: transform, clip-path; }
 
     @media (max-width: 980px) {
@@ -444,7 +458,12 @@
         traceNotSaved: "TRACE NOT SAVED", indexUnavailable: "INDEX UNAVAILABLE",
         indexRestartHelp: "Restart AI Project Finder to continue searching.", other: "Other",
         localSessionExpired: "LOCAL SESSION EXPIRED",
-        localSessionExpiredHelp: "Reload this page to reconnect to the local service."
+        localSessionExpiredHelp: "Reload this page to reconnect to the local service.",
+        untitledSession: "Untitled session", manualTrace: "Manual trace",
+        editTrace: "Edit", editTraceTitle: "Edit trace", deleteTrace: "Delete", confirmDelete: "Confirm delete",
+        traceUpdated: "TRACE UPDATED", traceDeleted: "TRACE DELETED", traceNotDeleted: "TRACE NOT DELETED",
+        showingOf: "SHOWING {shown} OF {total}", showMore: "Show {count} more",
+        moreTraces: "+{count} more", showLess: "Show less"
       },
       "zh-CN": {
         pageTitle: "AI Project Finder · 本地项目索引",
@@ -493,7 +512,12 @@
         traceNotSaved: "记录未保存", indexUnavailable: "索引不可用",
         indexRestartHelp: "重新启动 AI Project Finder 后可以继续搜索。", other: "其他",
         localSessionExpired: "本地会话已失效",
-        localSessionExpiredHelp: "刷新页面即可重新连接本地服务。"
+        localSessionExpiredHelp: "刷新页面即可重新连接本地服务。",
+        untitledSession: "未命名会话", manualTrace: "手工记录",
+        editTrace: "编辑", editTraceTitle: "编辑记录", deleteTrace: "删除", confirmDelete: "确认删除",
+        traceUpdated: "记录已更新", traceDeleted: "记录已删除", traceNotDeleted: "记录未删除",
+        showingOf: "显示 {shown} / 共 {total}", showMore: "再显示 {count} 条",
+        moreTraces: "+{count} 条", showLess: "收起"
       }
     };
     const copy = COPY[LOCALE];
@@ -517,9 +541,12 @@
       });
       root.classList.remove("locale-init");
     };
+    const PAGE_SIZE = 160;
+    const PROJECT_LINE_LIMIT = 5;
     const state = {
       records: [], summary: {}, generatedAt: null, query: "", sources: new Set(),
-      view: "sessions", range: "all", sort: "relevance", demo: false, locale: LOCALE
+      view: "sessions", range: "all", sort: "relevance", demo: false, locale: LOCALE,
+      limit: PAGE_SIZE, editingTraceId: ""
     };
     const labels = { codex: "Codex", claude: "Claude", kimi: "Kimi Code", "kimi-desktop": "Kimi Desktop", other: copy.other };
     const root = document.documentElement;
@@ -534,7 +561,9 @@
     applyLocale();
     updateThemeLabel();
     $("#themeBtn").addEventListener("click", () => {
-      root.setAttribute("data-theme", root.getAttribute("data-theme") === "dark" ? "light" : "dark");
+      const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { window.localStorage.setItem("apf-theme", next); } catch (_) {}
       updateThemeLabel();
     });
 
@@ -548,46 +577,100 @@
       return new Intl.DateTimeFormat(LOCALE === "zh-CN" ? "zh-CN" : "en-US", {year:"numeric", month:"2-digit", day:"2-digit"}).format(date);
     }
 
+    // "quoted words" stay one term, and source:claude narrows by tool.
+    function parseQuery(raw) {
+      const terms = [];
+      const sources = [];
+      const pattern = /"([^"]*)"|(\S+)/g;
+      let match;
+      while ((match = pattern.exec(String(raw || ""))) !== null) {
+        if (match[1] !== undefined) { terms.push(normalize(match[1])); continue; }
+        const word = match[2];
+        const filter = /^source:(.+)$/i.exec(word);
+        if (filter) { sources.push(normalize(filter[1])); continue; }
+        terms.push(normalize(word));
+      }
+      return {
+        terms: terms.filter(Boolean).slice(0, 8),
+        sources: sources.filter(Boolean)
+      };
+    }
+
     function queryTokens(query) {
-      return normalize(query).split(/\s+/).filter(Boolean).slice(0, 8);
+      return parseQuery(query).terms;
     }
 
     function highlight(value, query) {
-      const safe = escapeHtml(value);
-      const tokens = queryTokens(query);
-      if (!tokens.length) return safe;
-      let output = safe;
-      tokens.forEach((token) => {
-        const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        output = output.replace(new RegExp(`(${escaped})`, "gi"), "<mark>$1</mark>");
+      const raw = String(value ?? "");
+      const terms = queryTokens(query);
+      if (!raw || !terms.length) return escapeHtml(raw);
+      const folded = normalize(raw);
+      // Folding can change length on rare inputs. Offsets would then be wrong,
+      // so the text is returned unhighlighted rather than mangled.
+      if (folded.length !== raw.length) return escapeHtml(raw);
+      const ranges = [];
+      terms.forEach((term) => {
+        let from = 0;
+        while (from <= folded.length - term.length) {
+          const at = folded.indexOf(term, from);
+          if (at < 0) break;
+          ranges.push([at, at + term.length]);
+          from = at + term.length;
+        }
       });
-      return output;
+      if (!ranges.length) return escapeHtml(raw);
+      ranges.sort((a, b) => a[0] - b[0]);
+      const merged = [];
+      ranges.forEach(([start, end]) => {
+        const last = merged[merged.length - 1];
+        if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+        else merged.push([start, end]);
+      });
+      let output = "";
+      let cursor = 0;
+      merged.forEach(([start, end]) => {
+        output += `${escapeHtml(raw.slice(cursor, start))}<mark>${escapeHtml(raw.slice(start, end))}</mark>`;
+        cursor = end;
+      });
+      return output + escapeHtml(raw.slice(cursor));
     }
 
+    // Normalizing every excerpt on each keystroke was the slowest part of
+    // typing, so each record folds its text once and keeps it.
     function recordSearchText(record) {
-      return normalize([
-        record.title, record.project, record.customer, record.cwd,
-        record.excerpt, ...(record.artifacts || [])
-      ].filter(Boolean).join(" "));
+      if (record._search === undefined) {
+        record._search = normalize([
+          record.title, record.project, record.customer, record.cwd,
+          record.excerpt, record.notes, ...(record.artifacts || [])
+        ].filter(Boolean).join(" "));
+      }
+      return record._search;
     }
 
     function projectRecordSearchText(record) {
-      return normalize([
-        record.project, record.customer, record.title, record.cwd,
-        ...(record.artifacts || [])
-      ].filter(Boolean).join(" "));
+      if (record._projectSearch === undefined) {
+        record._projectSearch = normalize([
+          record.project, record.customer, record.title, record.cwd,
+          ...(record.artifacts || [])
+        ].filter(Boolean).join(" "));
+      }
+      return record._projectSearch;
     }
 
-    function recordMatches(record, tokens) {
-      if (!tokens.length) return true;
-      const searchable = recordSearchText(record);
-      return tokens.every((token) => searchable.includes(token));
+    function matchesSourceFilter(record, sources) {
+      if (!sources.length) return true;
+      const haystack = normalize(`${record.source || ""} ${record.source_label || ""}`);
+      return sources.some((value) => haystack.includes(value));
     }
 
-    function projectRecordMatches(record, tokens) {
-      if (!tokens.length) return true;
-      const searchable = projectRecordSearchText(record);
-      return tokens.every((token) => searchable.includes(token));
+    function recencyWeight(value) {
+      const time = new Date(value).getTime();
+      if (Number.isNaN(time)) return 1;
+      const days = (Date.now() - time) / 86400000;
+      if (days <= 30) return 1.3;
+      if (days <= 90) return 1.15;
+      if (days <= 365) return 1;
+      return 0.9;
     }
 
     function scoreRecord(record, tokens) {
@@ -596,13 +679,16 @@
       const project = normalize(record.project);
       const customer = normalize(record.customer);
       const cwd = normalize(record.cwd);
-      return tokens.reduce((score, token) => {
-        if (project.includes(token)) score += 18;
-        if (customer.includes(token)) score += 18;
-        if (title.includes(token)) score += 12;
-        if (cwd.includes(token)) score += 8;
-        return score + 2;
+      const base = tokens.reduce((score, token) => {
+        let value = 2;
+        if (project.includes(token)) value += 18;
+        if (customer.includes(token)) value += 18;
+        const titleAt = title.indexOf(token);
+        if (titleAt >= 0) value += titleAt < 20 ? 18 : 12;
+        if (cwd.includes(token)) value += 8;
+        return score + value;
       }, 0);
+      return base * recencyWeight(record.updated_at);
     }
 
     function matchedExcerpt(record, query) {
@@ -618,24 +704,36 @@
     }
 
     function filteredRecords() {
-      const tokens = queryTokens(state.query);
+      const {terms, sources} = parseQuery(state.query);
       const cutoff = state.range === "all" ? 0 : Date.now() - Number(state.range) * 86400000;
-      let rows = state.records.map((record) => ({...record, _score: scoreRecord(record, tokens)})).filter((record) => {
+      const scores = new Map();
+      const rows = state.records.filter((record) => {
         if (state.sources.size && !state.sources.has(record.source)) return false;
+        if (!matchesSourceFilter(record, sources)) return false;
         if (cutoff && new Date(record.updated_at).getTime() < cutoff) return false;
-        const matchesQuery = state.view === "projects" ? projectRecordMatches(record, tokens) : recordMatches(record, tokens);
-        if (!matchesQuery) return false;
+        const haystack = state.view === "projects"
+          ? projectRecordSearchText(record)
+          : recordSearchText(record);
+        if (!terms.every((term) => haystack.includes(term))) return false;
+        scores.set(record, scoreRecord(record, terms));
         return true;
       });
       if (state.sort === "oldest") rows.sort((a,b) => String(a.updated_at).localeCompare(String(b.updated_at)));
-      else if (state.sort === "recent" || !tokens.length) rows.sort((a,b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-      else rows.sort((a,b) => b._score - a._score || String(b.updated_at).localeCompare(String(a.updated_at)));
+      else if (state.sort === "recent" || !terms.length) rows.sort((a,b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+      else rows.sort((a,b) => (scores.get(b) || 0) - (scores.get(a) || 0) || String(b.updated_at).localeCompare(String(a.updated_at)));
       return rows;
     }
 
     function badge(record) {
       const kind = sourceClass(record.source);
       return `<span class="badge ${kind}">${escapeHtml(record.source_label || labels[record.source] || record.source)}</span>`;
+    }
+
+    function displayTitle(record) { return record.title || copy.untitledSession; }
+    function displayProject(record) { return record.project || copy.unclassifiedProject; }
+    function displayOrigin(record) {
+      if (record.manual) return copy.manualTrace;
+      return record.origin || copy.localSession;
     }
 
     function recordCard(record, index) {
@@ -646,12 +744,16 @@
       const workspaceButton = record.cwd ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${recordId}">${copy.openWorkspace}</button>` : "";
       const kimiCliButton = record.source === "kimi" ? `<button class="action-button" type="button" data-open-action="cli" data-record-id="${recordId}">${copy.openCli}</button>` : "";
       const openLabel = escapeHtml(record.source === "kimi-desktop" ? copy.openKimiDesktop : copy.openSession);
-      return `<article class="result-card tech-reveal" data-open-record-id="${recordId}" role="link" tabindex="0" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: record.title}))}">
-        <div class="card-grid"><span class="record-no">${String(index + 1).padStart(3, "0")}</span>${badge(record)}<div class="card-main"><div class="card-project">${highlight(record.project, state.query)}${record.customer ? ` / ${highlight(record.customer, state.query)}` : ""}</div><h4 class="result-title">${highlight(record.title, state.query)}</h4></div><time class="date" datetime="${escapeHtml(record.updated_at)}">${relativeDate(record.updated_at)}</time></div>
+      const manualId = escapeHtml(record.manual_id || "");
+      const manualButtons = record.manual
+        ? `<button class="action-button" type="button" data-manual-edit="${manualId}">${copy.editTrace}</button><button class="action-button" type="button" data-manual-delete="${manualId}">${copy.deleteTrace}</button>`
+        : "";
+      return `<article class="result-card tech-reveal" data-open-record-id="${recordId}">
+        <div class="card-grid"><span class="record-no">${String(index + 1).padStart(3, "0")}</span>${badge(record)}<div class="card-main"><div class="card-project">${highlight(displayProject(record), state.query)}${record.customer ? ` / ${highlight(record.customer, state.query)}` : ""}</div><h4 class="result-title"><button class="title-open" type="button" data-open-action="session" data-record-id="${recordId}" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: displayTitle(record)}))}">${highlight(displayTitle(record), state.query)}</button></h4></div><time class="date" datetime="${escapeHtml(record.updated_at)}">${relativeDate(record.updated_at)}</time></div>
         <div class="path-row"><span class="path-label">${copy.workspace}</span><span class="path" title="${escapeHtml(location)}">${highlight(location, state.query)}</span><button class="copy" type="button" data-copy="${encodeURIComponent(location)}">${copy.copyPath}</button></div>
         ${excerpt ? `<div class="excerpt">${highlight(excerpt, state.query)}</div>` : ""}
         ${artifacts ? `<div class="artifact-list">${artifacts}</div>` : ""}
-        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(record.origin || copy.localSession)}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
+        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(displayOrigin(record))}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${manualButtons}${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
       </article>`;
     }
 
@@ -666,11 +768,16 @@
         const sources = [...new Set(rows.map((row) => row.source))];
         const workspaces = [...new Set(rows.map((row) => row.cwd).filter(Boolean))];
         const sourceBadges = sources.map((source) => badge({source, source_label: labels[source] || source})).join("");
-        const lines = rows.slice(0, 5).map((row) => {
+        const lines = rows.map((row, position) => {
           const recordId = escapeHtml(row.id || "");
           const lineOpenLabel = row.source === "kimi-desktop" ? copy.openKimiDesktop : copy.open;
-          return `<div class="session-line" data-open-record-id="${recordId}" role="link" tabindex="0" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: row.title}))}">${badge(row)}<div class="session-line-title" title="${escapeHtml(row.title)}">${highlight(row.title, state.query)}</div><time class="date">${relativeDate(row.updated_at)}</time><button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${escapeHtml(lineOpenLabel)}</button></div>`;
+          const hidden = position >= PROJECT_LINE_LIMIT ? " extra" : "";
+          return `<div class="session-line${hidden}" data-open-record-id="${recordId}">${badge(row)}<div class="session-line-title" title="${escapeHtml(displayTitle(row))}">${highlight(displayTitle(row), state.query)}</div><time class="date">${relativeDate(row.updated_at)}</time><button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: displayTitle(row)}))}">${escapeHtml(lineOpenLabel)}</button></div>`;
         }).join("");
+        const remaining = Math.max(0, rows.length - PROJECT_LINE_LIMIT);
+        const moreButton = remaining
+          ? `<button class="session-more" type="button" data-expand-project="1" aria-expanded="false">${formatCopy("moreTraces", {count: remaining})}</button>`
+          : "";
         const latestId = escapeHtml(rows[0].id || "");
         const workspaceButton = workspaces.length ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${latestId}">${copy.openWorkspace}</button>` : "";
         const projectSummary = [
@@ -678,7 +785,7 @@
           formatCopy("workspaces", {count: workspaces.length}),
           formatCopy("latest", {date: relativeDate(rows[0].updated_at)})
         ].join(" / ");
-        return `<article class="result-card project-card tech-reveal"><div class="project-head"><span class="record-no">${String(index + 1).padStart(3, "0")}</span><div><h4>${highlight(project, state.query)}</h4><div class="project-summary">${projectSummary}</div></div><div class="project-side"><div class="source-stack">${sourceBadges}</div>${workspaceButton}</div></div><div class="session-lines">${lines}</div></article>`;
+        return `<article class="result-card project-card tech-reveal"><div class="project-head"><span class="record-no">${String(index + 1).padStart(3, "0")}</span><div><h4>${highlight(project, state.query)}</h4><div class="project-summary">${projectSummary}</div></div><div class="project-side"><div class="source-stack">${sourceBadges}</div>${workspaceButton}</div></div><div class="session-lines">${lines}${moreButton}</div></article>`;
       }).join("");
     }
 
@@ -692,16 +799,29 @@
 
     function render() {
       const records = filteredRecords();
-      const projectCount = new Set(records.map((record) => record.project)).size;
+      const projectCount = new Set(records.map((record) => displayProject(record))).size;
       $("#resultsTitle").textContent = state.query ? formatCopy("traceHeading", {query: state.query}) : copy.recentTracesUpper;
-      $("#resultsMeta").textContent = state.view === "sessions"
+      const summary = state.view === "sessions"
         ? formatCopy("sessionMeta", {sessions: records.length, projects: projectCount})
         : formatCopy("projectMeta", {projects: projectCount, traces: records.length});
+      const shown = state.view === "sessions" ? Math.min(state.limit, records.length) : records.length;
+      // Say when the list is cut short rather than letting it look complete.
+      $("#resultsMeta").textContent = shown < records.length
+        ? `${summary} / ${formatCopy("showingOf", {shown, total: records.length})}`
+        : summary;
       if (!records.length) {
         $("#resultList").innerHTML = `<div class="empty"><div><strong>${copy.noMatch}</strong><span>${copy.noMatchHelp}</span></div></div>`;
         return;
       }
-      $("#resultList").innerHTML = state.view === "sessions" ? records.slice(0, 160).map(recordCard).join("") : projectCards(records);
+      if (state.view === "sessions") {
+        const remaining = records.length - shown;
+        const moreButton = remaining > 0
+          ? `<button class="show-more" type="button" id="showMore">${formatCopy("showMore", {count: remaining})}</button>`
+          : "";
+        $("#resultList").innerHTML = records.slice(0, shown).map(recordCard).join("") + moreButton;
+      } else {
+        $("#resultList").innerHTML = projectCards(records);
+      }
       revealDynamic();
     }
 
@@ -791,8 +911,67 @@
       }
     }
 
-    function openModal() { $("#modalBackdrop").classList.add("open"); $("#manualSource").focus(); }
-    function closeModal() { $("#modalBackdrop").classList.remove("open"); }
+    // Search state lives in the address bar, so a result list can be reloaded,
+    // bookmarked, or opened straight from a link.
+    function syncUrl() {
+      const params = new URLSearchParams();
+      params.set("lang", LOCALE);
+      if (state.query) params.set("q", state.query);
+      if (state.sources.size) params.set("source", [...state.sources].join(","));
+      if (state.view !== "sessions") params.set("view", state.view);
+      if (state.range !== "all") params.set("range", state.range);
+      if (state.sort !== "relevance") params.set("sort", state.sort);
+      window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
+    }
+
+    function restoreFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const query = params.get("q");
+      if (query) { state.query = query.trim(); $("#search").value = query; }
+      const sources = params.get("source");
+      if (sources) sources.split(",").filter(Boolean).forEach((item) => state.sources.add(item));
+      const view = params.get("view");
+      if (["sessions", "projects"].includes(view)) state.view = view;
+      const range = params.get("range");
+      if (["all", "30", "90", "365"].includes(range)) state.range = range;
+      const sort = params.get("sort");
+      if (["relevance", "recent", "oldest"].includes(sort)) state.sort = sort;
+      $("#timeRange").value = state.range;
+      $("#sortMode").value = state.sort;
+      $("#viewSwitch").querySelectorAll("button").forEach((item) => item.classList.toggle("active", item.dataset.view === state.view));
+    }
+
+    let lastFocusedElement = null;
+    function focusableModalFields() {
+      return [...$("#manualForm").querySelectorAll("input, textarea, button")].filter((item) => !item.disabled);
+    }
+    function openModal(record = null) {
+      lastFocusedElement = document.activeElement;
+      state.editingTraceId = record ? String(record.manual_id || "") : "";
+      $("#modalTitle").textContent = record ? copy.editTraceTitle : copy.addTrace;
+      $("#manualSource").value = record ? (record.manual_source || record.source || "") : "";
+      $("#manualProject").value = record ? (record.project || "") : "";
+      $("#manualTitle").value = record ? (record.title || "") : "";
+      $("#manualLocation").value = record ? (record.cwd || "") : "";
+      $("#manualNotes").value = record ? (record.notes || "") : "";
+      $("#modalBackdrop").classList.add("open");
+      $("#manualSource").focus();
+    }
+    function closeModal() {
+      $("#modalBackdrop").classList.remove("open");
+      state.editingTraceId = "";
+      if (lastFocusedElement && document.contains(lastFocusedElement)) lastFocusedElement.focus();
+      lastFocusedElement = null;
+    }
+    function trapModalFocus(event) {
+      if (event.key !== "Tab" || !$("#modalBackdrop").classList.contains("open")) return;
+      const fields = focusableModalFields();
+      if (!fields.length) return;
+      const first = fields[0];
+      const last = fields[fields.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
     function scrollToFirstResult() {
       window.requestAnimationFrame(() => {
         const target = $("#resultList .result-card") || $("#resultsTitle");
@@ -850,7 +1029,8 @@
       }
     }
 
-    $("#search").addEventListener("input", (event) => { state.query = event.target.value.trim(); render(); });
+    function applyFilterChange() { state.limit = PAGE_SIZE; render(); syncUrl(); }
+    $("#search").addEventListener("input", (event) => { state.query = event.target.value.trim(); applyFilterChange(); });
     $("#search").addEventListener("keydown", (event) => {
       if (event.key !== "Enter" || event.isComposing) return;
       event.preventDefault();
@@ -861,21 +1041,47 @@
       const button = event.target.closest("[data-source]"); if (!button) return;
       const source = button.dataset.source;
       state.sources.has(source) ? state.sources.delete(source) : state.sources.add(source);
-      renderSources(); render();
+      renderSources(); applyFilterChange();
     });
     $("#viewSwitch").addEventListener("click", (event) => {
       const button = event.target.closest("[data-view]"); if (!button) return;
       state.view = button.dataset.view;
       $("#viewSwitch").querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
-      render();
+      applyFilterChange();
     });
-    $("#timeRange").addEventListener("change", (event) => { state.range = event.target.value; render(); });
-    $("#sortMode").addEventListener("change", (event) => { state.sort = event.target.value; render(); });
+    $("#timeRange").addEventListener("change", (event) => { state.range = event.target.value; applyFilterChange(); });
+    $("#sortMode").addEventListener("change", (event) => { state.sort = event.target.value; applyFilterChange(); });
     $("#resultList").addEventListener("click", async (event) => {
       const copyButton = event.target.closest("[data-copy]");
       if (copyButton) {
         const value = decodeURIComponent(copyButton.dataset.copy || "");
         try { await navigator.clipboard.writeText(value); toast(copy.pathCopied); } catch (_) { toast(value); }
+        return;
+      }
+      if (event.target.closest("#showMore")) {
+        state.limit += PAGE_SIZE;
+        render();
+        return;
+      }
+      const expandButton = event.target.closest("[data-expand-project]");
+      if (expandButton) {
+        const lines = expandButton.closest(".session-lines");
+        const expanded = lines.classList.toggle("expanded");
+        expandButton.setAttribute("aria-expanded", expanded ? "true" : "false");
+        expandButton.textContent = expanded
+          ? copy.showLess
+          : formatCopy("moreTraces", {count: lines.querySelectorAll(".session-line.extra").length});
+        return;
+      }
+      const editButton = event.target.closest("[data-manual-edit]");
+      if (editButton) {
+        const record = state.records.find((item) => String(item.manual_id || "") === editButton.dataset.manualEdit);
+        if (record) openModal(record);
+        return;
+      }
+      const deleteButton = event.target.closest("[data-manual-delete]");
+      if (deleteButton) {
+        await deleteTrace(deleteButton);
         return;
       }
       const actionButton = event.target.closest("[data-open-action]");
@@ -887,38 +1093,82 @@
       const target = event.target.closest("[data-open-record-id]");
       if (target) await openRecord(target.dataset.openRecordId || "");
     });
-    $("#resultList").addEventListener("keydown", async (event) => {
-      if (!['Enter', ' '].includes(event.key) || event.target.closest("button")) return;
-      const target = event.target.closest("[data-open-record-id]");
-      if (!target) return;
-      event.preventDefault();
-      await openRecord(target.dataset.openRecordId || "");
-    });
     $("#refreshButton").addEventListener("click", refreshIndex);
-    $("#addButton").addEventListener("click", openModal);
+    $("#addButton").addEventListener("click", () => openModal());
     $("#closeModal").addEventListener("click", closeModal);
     $("#cancelModal").addEventListener("click", closeModal);
     $("#modalBackdrop").addEventListener("click", (event) => { if (event.target === $("#modalBackdrop")) closeModal(); });
     $("#manualForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(event.target).entries());
+      const editing = Boolean(state.editingTraceId);
+      if (editing) payload.id = state.editingTraceId;
       try {
-        const response = await fetch("/api/manual", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+        const response = await fetch(editing ? "/api/manual/update" : "/api/manual", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
         if (response.status === 403) {
           const failure = await response.json().catch(() => ({}));
           if (failure.error_code === "demo_read_only") throw new Error("demo mode is read only");
           toast(copy.localSessionExpired); reloadForNewSession(); return;
         }
         if (!response.ok) throw new Error("save failed");
-        event.target.reset(); closeModal(); await loadIndex(); toast(copy.traceSaved);
+        event.target.reset(); closeModal(); await loadIndex();
+        toast(editing ? copy.traceUpdated : copy.traceSaved);
       } catch (_) { toast(copy.traceNotSaved); }
     });
+
+    // Two-step confirm keeps a removal deliberate without a second dialog.
+    async function deleteTrace(button) {
+      const traceId = button.dataset.manualDelete || "";
+      if (button.dataset.confirming !== "1") {
+        button.dataset.confirming = "1";
+        button.textContent = copy.confirmDelete;
+        window.setTimeout(() => {
+          if (!document.contains(button)) return;
+          button.dataset.confirming = "0";
+          button.textContent = copy.deleteTrace;
+        }, 4000);
+        return;
+      }
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/manual/delete", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id: traceId})});
+        if (response.status === 403) { toast(copy.localSessionExpired); reloadForNewSession(); return; }
+        if (!response.ok) throw new Error("delete failed");
+        await loadIndex();
+        toast(copy.traceDeleted);
+      } catch (_) {
+        button.disabled = false;
+        toast(copy.traceNotDeleted);
+      }
+    }
+
     document.addEventListener("keydown", (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("#search").focus(); }
       if (event.key === "Escape") closeModal();
+      trapModalFocus(event);
     });
 
-    loadIndex().catch((error) => {
+    // The launch refresh runs in the background. Watch for it to land instead
+    // of leaving the page on the index that existed when it opened.
+    async function watchForBackgroundRefresh() {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 5000));
+        if (document.visibilityState !== "visible") continue;
+        try {
+          const response = await fetch("/api/health", {cache: "no-store"});
+          if (!response.ok) return;
+          const health = await response.json();
+          if (health.generated_at && health.generated_at !== state.generatedAt) {
+            await loadIndex();
+            toast(copy.indexRefreshed);
+            return;
+          }
+        } catch (_) { return; }
+      }
+    }
+
+    restoreFromUrl();
+    loadIndex().then(watchForBackgroundRefresh).catch((error) => {
       const expired = error && error.code === "unauthorized";
       const heading = expired ? copy.localSessionExpired : copy.indexUnavailable;
       const help = expired ? copy.localSessionExpiredHelp : copy.indexRestartHelp;

@@ -64,6 +64,15 @@ Search covers:
 
 Search is case-insensitive. Every entered keyword must appear in a matched record.
 
+Two refinements are available in the search field:
+
+```text
+"launch checklist"     an exact phrase rather than separate words
+source:claude          only sessions from one tool
+```
+
+Results are ranked by where a match lands, with recent sessions weighted slightly higher. The search text, source filter, view, date range, and sort order are kept in the address bar, so a result list can be reloaded, bookmarked, or shared as a link on the same computer.
+
 ### Session and project views
 
 **Sessions** shows individual conversations. **Projects** groups multiple AI traces around the same project clue.
@@ -188,11 +197,17 @@ Select **Add trace** and save:
 - Conversation URL or local path
 - Search keywords
 
+A saved trace carries **Edit** and **Delete** actions on its result card, so a wrong link or title can be corrected without opening the file by hand. Delete asks for a second click before it removes the record.
+
 Manual traces are written to `data/manual.json`. This private runtime file is created automatically on the first saved trace and is excluded from Git. The repository includes `data/manual.example.json` as an empty template.
 
 ### Refresh the index
 
 Use **Refresh** after creating new sessions, installing another AI tool, moving a session folder, or changing a source path.
+
+A refresh re-reads only the transcripts whose size or timestamp changed since the last one, so it usually completes in well under a second. Parsed records are kept in `data/parse-cache.json`, another private runtime file excluded from Git; deleting it forces a full re-read.
+
+The refresh that runs at launch happens in the background. An open dashboard notices when it finishes and reloads the list on its own.
 
 ### Custom source paths
 
@@ -240,6 +255,28 @@ For multiple Claude Desktop profiles on macOS, an optional environment variable 
 ```bash
 export AI_PROJECT_FINDER_CLAUDE_PROFILES="Claude,Claude-Work"
 ```
+
+### Project naming
+
+A record's project label comes from its workspace path. Folder conventions differ per person, so the markers are configurable:
+
+```json
+{
+  "naming": {
+    "project_markers": ["projects"],
+    "client_markers": ["clients", "\u5ba2\u6237"],
+    "dated_workspace_markers": ["codex"],
+    "ignore_dirs": ["documents", "downloads", "desktop", "tmp", "new-chat"]
+  }
+}
+```
+
+- `project_markers`: the folder after this one names the project, as in `.../projects/atlas-launch`.
+- `client_markers`: the folder after this one names a client. A numbered prefix is allowed, so `clients` also matches a folder named `01 clients`.
+- `dated_workspace_markers`: a workspace that files work under a date folder, as in `.../codex/2026-07-25/atlas-launch`.
+- `ignore_dirs`: folder names too generic to stand as a project name. The home folder is always treated this way.
+
+When the path yields nothing, the label is guessed from the opening request, and the interface shows **Unclassified project** when even that is empty.
 
 ## Privacy and Security
 
