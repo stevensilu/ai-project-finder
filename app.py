@@ -8,6 +8,7 @@ import errno
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -19,6 +20,7 @@ import webbrowser
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
@@ -73,6 +75,25 @@ SPACE_RE = re.compile(r"\s+")
 DATE_PART_RE = re.compile(r"^20\d{2}-\d{2}-\d{2}$")
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+# One unguessable token per launch. The dashboard page receives it as a strict
+# same-site cookie, so a website cannot reach the local API even when it knows
+# the port. Binding to 127.0.0.1 alone does not stop a browser on this computer
+# from being used as the courier.
+SESSION_TOKEN = secrets.token_urlsafe(24)
+SESSION_COOKIE_NAME = "apf_session"
+SAME_SITE_FETCH_VALUES = {"same-origin", "none"}
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "form-action 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'"
+)
 NON_USER_CODEX_THREAD_SOURCES = {"subagent", "automation"}
 GENERIC_DIRS = {
     HOME_DIR.name.lower(),
@@ -458,6 +479,7 @@ def load_claude_desktop_session_map(*, all_profiles: bool = False) -> dict[str, 
             metadata = {
                 "desktop_session_id": desktop_session_id,
                 "desktop_title": title,
+                "desktop_title_source": title_source,
                 "desktop_profile": profile,
             }
             current = ranked.get(cli_session_id)
@@ -919,6 +941,7 @@ def parse_claude(
     session_id = path.stem
     version = ""
     custom_title = ""
+    ai_title = ""
     message_count = 0
     for row in read_json_lines(path):
         cwd = str(row.get("cwd") or cwd)
@@ -928,7 +951,11 @@ def parse_claude(
         if timestamp:
             created = created or str(timestamp)
             updated = str(timestamp)
-        if row.get("type") == "user":
+        # Subagent turns are agent instructions and tool results, not requests
+        # the person typed. Current clients keep them in a separate subagents
+        # folder that the indexer already skips; this check keeps them out even
+        # when a client writes them into the main transcript instead.
+        if row.get("type") == "user" and not row.get("isSidechain"):
             message = row.get("message", {})
             text = text_from_content(message.get("content") if isinstance(message, dict) else message)
             if text and total_chars < max_prompt_chars:
@@ -939,12 +966,31 @@ def parse_claude(
             candidate_title = str(row.get("customTitle") or "").strip()
             if candidate_title:
                 custom_title = candidate_title
+        if row.get("type") == "ai-title":
+            candidate_ai_title = str(row.get("aiTitle") or "").strip()
+            if candidate_ai_title:
+                ai_title = candidate_ai_title
     if not prompts and not cwd:
         return None
     stat = path.stat()
     desktop_metadata = (desktop_sessions or {}).get(session_id, {})
     desktop_title = str(desktop_metadata.get("desktop_title") or "").strip()
-    title = custom_title or desktop_title or title_from_prompts(prompts, Path(cwd).name or "Claude 会话")
+    desktop_title_is_user_set = (
+        str(desktop_metadata.get("desktop_title_source") or "").strip().lower() == "user"
+    )
+    # A title the person wrote outranks a generated one, and any client-side
+    # title outranks a sentence sliced out of the first prompt.
+    if custom_title:
+        title, title_source = custom_title, "custom-title"
+    elif desktop_title and desktop_title_is_user_set:
+        title, title_source = desktop_title, "desktop-user"
+    elif ai_title:
+        title, title_source = ai_title, "ai-title"
+    elif desktop_title:
+        title, title_source = desktop_title, "desktop"
+    else:
+        title = title_from_prompts(prompts, Path(cwd).name or "Claude 会话")
+        title_source = "first-prompt"
     record = make_record(
         source="claude",
         session_id=session_id,
@@ -961,7 +1007,7 @@ def parse_claude(
     if SESSION_ID_RE.fullmatch(desktop_session_id):
         record["desktop_session_id"] = desktop_session_id
         record["desktop_profile"] = str(desktop_metadata.get("desktop_profile") or "")
-    record["title_source"] = "custom-title" if custom_title else "desktop" if desktop_title else "first-prompt"
+    record["title_source"] = title_source
     return record
 
 
@@ -1149,12 +1195,123 @@ def build_index() -> dict[str, Any]:
 
 class FinderHandler(SimpleHTTPRequestHandler):
     server_version = "AIProjectFinder/1.0"
+    sys_version = ""
+    issue_session_cookie = False
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+        if self.issue_session_cookie:
+            self.issue_session_cookie = False
+            self.send_header(
+                "Set-Cookie",
+                f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}; Path=/; SameSite=Strict; HttpOnly",
+            )
+        super().end_headers()
+
+    def host_header_is_loopback(self) -> bool:
+        """Reject a Host that is not this local service.
+
+        A website can point its own hostname at 127.0.0.1 (DNS rebinding) and
+        then read the local API as same-origin. The browser still sends the
+        website's hostname here, so the Host header is what separates the two.
+        """
+        raw = str(self.headers.get("Host") or "").strip()
+        if not raw:
+            return False
+        if raw.startswith("["):
+            host, _, remainder = raw[1:].partition("]")
+            port = remainder[1:] if remainder.startswith(":") else ""
+        else:
+            host, _, port = raw.partition(":")
+        if host.strip().lower() not in LOOPBACK_HOSTS:
+            return False
+        return not port or port == str(self.server.server_port)
+
+    def request_token(self) -> str:
+        header_token = str(self.headers.get("X-APF-Token") or "").strip()
+        if header_token:
+            return header_token
+        jar = SimpleCookie()
+        try:
+            jar.load(str(self.headers.get("Cookie") or ""))
+        except CookieError:
+            return ""
+        morsel = jar.get(SESSION_COOKIE_NAME)
+        return morsel.value if morsel else ""
+
+    def request_is_authorized(self) -> bool:
+        return secrets.compare_digest(self.request_token(), SESSION_TOKEN)
+
+    def request_is_same_origin(self) -> bool:
+        """Reject an API call that another website asked the browser to send."""
+        fetch_site = str(self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if fetch_site and fetch_site not in SAME_SITE_FETCH_VALUES:
+            return False
+        origin = str(self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True
+        parsed = urlparse(origin)
+        if parsed.scheme != "http":
+            return False
+        try:
+            port = parsed.port
+        except ValueError:
+            return False
+        return str(parsed.hostname or "").lower() in LOOPBACK_HOSTS and (
+            port is None or port == self.server.server_port
+        )
+
+    def request_body_is_json(self) -> bool:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return False
+        if length <= 0:
+            return True
+        media_type = str(self.headers.get("Content-Type") or "").split(";", 1)[0]
+        return media_type.strip().lower() == "application/json"
+
+    def deny(self, status: HTTPStatus, code: str, message: str) -> None:
+        if self.command == "HEAD":
+            self.send_response(status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_json({"ok": False, "error": message, "error_code": code}, status)
+
+    def api_request_is_allowed(self) -> bool:
+        """Run every local-boundary check and answer the caller when one fails."""
+        if not self.request_is_same_origin():
+            self.deny(
+                HTTPStatus.FORBIDDEN,
+                "cross_origin",
+                "cross-origin request rejected",
+            )
+            return False
+        if not self.request_is_authorized():
+            self.deny(
+                HTTPStatus.FORBIDDEN,
+                "unauthorized",
+                "local session token required; reload the dashboard",
+            )
+            return False
+        if not self.request_body_is_json():
+            self.deny(
+                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media_type",
+                "application/json body required",
+            )
+            return False
+        return True
 
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1165,18 +1322,48 @@ class FinderHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_OPTIONS(self) -> None:
+        # No CORS headers: a cross-origin preflight must fail rather than pass.
+        self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
+        self.send_header("Allow", "GET, HEAD, POST")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_HEAD(self) -> None:
+        self.issue_session_cookie = False
+        if not self.host_header_is_loopback():
+            self.deny(HTTPStatus.FORBIDDEN, "invalid_host", "unexpected Host header")
+            return
+        if urlparse(self.path).path.startswith("/api/"):
+            self.deny(HTTPStatus.METHOD_NOT_ALLOWED, "method_not_allowed", "use GET")
+            return
+        self.issue_session_cookie = True
+        super().do_HEAD()
+
     def do_GET(self) -> None:
+        self.issue_session_cookie = False
+        if not self.host_header_is_loopback():
+            self.deny(HTTPStatus.FORBIDDEN, "invalid_host", "unexpected Host header")
+            return
         parsed = urlparse(self.path)
-        if parsed.path == "/api/index":
-            self.send_json(load_index_payload())
+        if parsed.path.startswith("/api/"):
+            if not self.api_request_is_allowed():
+                return
+            if parsed.path == "/api/index":
+                self.send_json(load_index_payload())
+                return
+            if parsed.path == "/api/health":
+                self.send_json({
+                    "ok": True,
+                    "demo": DEMO_MODE,
+                    "index_exists": True if DEMO_MODE else INDEX_FILE.exists(),
+                })
+                return
+            self.deny(HTTPStatus.NOT_FOUND, "unknown_endpoint", "unknown endpoint")
             return
-        if parsed.path == "/api/health":
-            self.send_json({
-                "ok": True,
-                "demo": DEMO_MODE,
-                "index_exists": True if DEMO_MODE else INDEX_FILE.exists(),
-            })
-            return
+        # Any page load from this computer receives the current session token,
+        # so a bookmarked dashboard URL keeps working across restarts.
+        self.issue_session_cookie = True
         if parsed.path == "/":
             query = parse_qs(parsed.query)
             if "lang" not in query:
@@ -1200,6 +1387,12 @@ class FinderHandler(SimpleHTTPRequestHandler):
             return {}
 
     def do_POST(self) -> None:
+        self.issue_session_cookie = False
+        if not self.host_header_is_loopback():
+            self.deny(HTTPStatus.FORBIDDEN, "invalid_host", "unexpected Host header")
+            return
+        if not self.api_request_is_allowed():
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/api/reindex":
             try:

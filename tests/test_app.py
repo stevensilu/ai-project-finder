@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from http.client import HTTPConnection
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -247,7 +248,120 @@ class DemoFixtureTest(unittest.TestCase):
             self.assertEqual(app.APP_LOCALE, "zh-CN")
 
 
-class DemoHTTPIsolationTest(unittest.TestCase):
+class ClaudeTranscriptParserTest(unittest.TestCase):
+    def write_transcript(self, directory: Path, rows: list[dict]) -> Path:
+        path = directory / "session.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_subagent_turns_stay_out_of_the_excerpt_and_input_count(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.write_transcript(
+                root,
+                [
+                    {
+                        "type": "user",
+                        "sessionId": "sess-sidechain-001",
+                        "cwd": str(root),
+                        "timestamp": "2026-07-20T10:00:00Z",
+                        "message": {"content": "Locate the launch plan spreadsheet"},
+                    },
+                    {
+                        "type": "user",
+                        "isSidechain": True,
+                        "sessionId": "sess-sidechain-001",
+                        "message": {"content": "SUBAGENT INSTRUCTION BLOCK"},
+                    },
+                    {
+                        "type": "user",
+                        "isSidechain": True,
+                        "sessionId": "sess-sidechain-001",
+                        "message": {"content": "TOOL RESULT PAYLOAD"},
+                    },
+                ],
+            )
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertEqual(record["message_count"], 1)
+        self.assertNotIn("SUBAGENT INSTRUCTION BLOCK", record["excerpt"])
+        self.assertNotIn("TOOL RESULT PAYLOAD", record["search_text"])
+
+    def test_title_prefers_a_written_title_over_a_generated_one(self) -> None:
+        base_rows = [
+            {
+                "type": "user",
+                "sessionId": "sess-titles-001",
+                "timestamp": "2026-07-20T10:00:00Z",
+                "cwd": "/tmp/apf-title-fixture",
+                "message": {"content": "first prompt that should lose to any title row"},
+            },
+            {"type": "ai-title", "sessionId": "sess-titles-001", "aiTitle": "Generated title"},
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            generated = app.parse_claude(self.write_transcript(root, base_rows), 9000)
+            renamed = app.parse_claude(
+                self.write_transcript(
+                    root,
+                    [
+                        *base_rows,
+                        {
+                            "type": "custom-title",
+                            "sessionId": "sess-titles-001",
+                            "customTitle": "Written title",
+                        },
+                        # Claude Code keeps refreshing its own title after a
+                        # rename, so the later row must not win.
+                        {
+                            "type": "ai-title",
+                            "sessionId": "sess-titles-001",
+                            "aiTitle": "Generated title again",
+                        },
+                    ],
+                ),
+                9000,
+            )
+        assert generated is not None and renamed is not None
+        self.assertEqual(generated["title"], "Generated title")
+        self.assertEqual(generated["title_source"], "ai-title")
+        self.assertEqual(renamed["title"], "Written title")
+        self.assertEqual(renamed["title_source"], "custom-title")
+
+    def test_a_user_set_desktop_title_outranks_a_generated_title(self) -> None:
+        rows = [
+            {
+                "type": "user",
+                "sessionId": "sess-desktop-001",
+                "cwd": "/tmp/apf-title-fixture",
+                "timestamp": "2026-07-20T10:00:00Z",
+                "message": {"content": "first prompt"},
+            },
+            {"type": "ai-title", "sessionId": "sess-desktop-001", "aiTitle": "Generated title"},
+        ]
+        desktop_sessions = {
+            "sess-desktop-001": {
+                "desktop_session_id": "desktop-session-001",
+                "desktop_title": "Desktop rename",
+                "desktop_title_source": "user",
+                "desktop_profile": "Claude",
+            }
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            record = app.parse_claude(
+                self.write_transcript(Path(temporary), rows), 9000, desktop_sessions
+            )
+        assert record is not None
+        self.assertEqual(record["title"], "Desktop rename")
+        self.assertEqual(record["title_source"], "desktop-user")
+
+
+class DemoServerTestCase(unittest.TestCase):
+    """Serve the real handler over loopback with every real side effect blocked."""
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.demo_patch = patch.object(app, "DEMO_MODE", True)
@@ -294,11 +408,52 @@ class DemoHTTPIsolationTest(unittest.TestCase):
             f"{self.base_url}{path}",
             data=body,
             method=method,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "X-APF-Token": app.SESSION_TOKEN,
+            },
         )
         with urlopen(request, timeout=3) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def raw_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        host: str | None = None,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        with_token: bool = True,
+    ) -> tuple[int, dict[str, str], bytes]:
+        """Send a hand-built request so Host and fetch metadata can be forged."""
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        try:
+            connection.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+            connection.putheader("Host", host or f"127.0.0.1:{self.server.server_port}")
+            if with_token:
+                connection.putheader("X-APF-Token", app.SESSION_TOKEN)
+            if body is not None:
+                connection.putheader("Content-Length", str(len(body)))
+            for name, value in (headers or {}).items():
+                connection.putheader(name, value)
+            connection.endheaders()
+            if body is not None:
+                connection.send(body)
+            response = connection.getresponse()
+            return (
+                response.status,
+                {name.lower(): value for name, value in response.getheaders()},
+                response.read(),
+            )
+        finally:
+            connection.close()
+
+    def error_code(self, raw_body: bytes) -> str:
+        return str(json.loads(raw_body.decode("utf-8")).get("error_code") or "")
+
+
+class DemoHTTPIsolationTest(DemoServerTestCase):
     def test_demo_reindex_and_open_are_safe_no_ops(self) -> None:
         index_status, index_payload = self.read_json("/api/index")
         self.assertEqual(index_status, 200)
@@ -326,8 +481,81 @@ class DemoHTTPIsolationTest(unittest.TestCase):
                 payload={"title": "This must not be stored"},
             )
         self.assertEqual(raised.exception.code, 403)
+        # The refusal must come from Demo Mode, not from a failed token check.
+        self.assertEqual(self.error_code(raised.exception.read()), "demo_read_only")
         raised.exception.close()
         self.assertFalse(app.MANUAL_FILE.exists())
+
+
+class LocalApiBoundaryTest(DemoServerTestCase):
+    """A website must not be able to read the index or trigger an open action."""
+
+    OPEN_BODY = json.dumps(
+        {"record_id": "claude:demo-atlas-claude", "action": "session"}
+    ).encode("utf-8")
+
+    def test_a_forged_host_header_is_refused(self) -> None:
+        # DNS rebinding keeps the attacker's hostname in the Host header.
+        status, _, body = self.raw_request("GET", "/api/index", host="evil.example.com")
+        self.assertEqual(status, 403)
+        self.assertEqual(self.error_code(body), "invalid_host")
+
+    def test_a_request_without_the_session_token_is_refused(self) -> None:
+        status, _, body = self.raw_request("GET", "/api/index", with_token=False)
+        self.assertEqual(status, 403)
+        self.assertEqual(self.error_code(body), "unauthorized")
+
+    def test_the_page_cookie_authorizes_the_api(self) -> None:
+        status, _, _ = self.raw_request(
+            "GET",
+            "/api/health",
+            with_token=False,
+            headers={"Cookie": f"{app.SESSION_COOKIE_NAME}={app.SESSION_TOKEN}"},
+        )
+        self.assertEqual(status, 200)
+
+    def test_a_cross_site_post_is_refused_even_with_a_valid_token(self) -> None:
+        status, _, body = self.raw_request(
+            "POST",
+            "/api/open",
+            headers={
+                "Content-Type": "application/json",
+                "Origin": "https://evil.example.com",
+                "Sec-Fetch-Site": "cross-site",
+            },
+            body=self.OPEN_BODY,
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self.error_code(body), "cross_origin")
+
+    def test_a_simple_post_body_that_skips_preflight_is_refused(self) -> None:
+        status, _, body = self.raw_request(
+            "POST",
+            "/api/open",
+            headers={"Content-Type": "text/plain"},
+            body=self.OPEN_BODY,
+        )
+        self.assertEqual(status, 415)
+        self.assertEqual(self.error_code(body), "unsupported_media_type")
+
+    def test_a_preflight_never_receives_permission(self) -> None:
+        status, headers, _ = self.raw_request("OPTIONS", "/api/open")
+        self.assertEqual(status, 405)
+        self.assertNotIn("access-control-allow-origin", headers)
+
+    def test_a_page_load_issues_a_strict_session_cookie(self) -> None:
+        status, headers, _ = self.raw_request("GET", "/?lang=en", with_token=False)
+        self.assertEqual(status, 200)
+        cookie = headers.get("set-cookie", "")
+        self.assertIn(f"{app.SESSION_COOKIE_NAME}={app.SESSION_TOKEN}", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertEqual(headers.get("x-frame-options"), "DENY")
+        self.assertIn("frame-ancestors 'none'", headers.get("content-security-policy", ""))
+
+    def test_api_responses_do_not_hand_out_the_token(self) -> None:
+        _, headers, _ = self.raw_request("GET", "/api/health")
+        self.assertNotIn("set-cookie", headers)
 
 
 if __name__ == "__main__":

@@ -255,6 +255,17 @@ AI Project Finder 围绕本地会话数据运行：
 - 生成的索引与打开诊断文件已排除在 Git 之外。
 - 打开动作会调用已安装的 AI 客户端、Terminal、Explorer 或 Finder，或已保存的 URL。
 
+### 本地 API 边界
+
+绑定 `127.0.0.1` 可以挡住其他电脑，但单靠这一点还不足以阻止同一浏览器里打开的网站访问本地服务。API 另外做了四层校验：
+
+- 每次启动生成一个会话 token，dashboard 页面通过 `SameSite=Strict`、`HttpOnly` cookie 拿到它，`/api/` 请求缺少该 token 会被拒绝。
+- `Host` 头不是本地回环地址的请求会被拒绝，这一条用于阻断 DNS rebinding。
+- 跨站 POST 请求会被拒绝，请求体必须是 `application/json`，跨源 preflight 不会获得授权。
+- 响应带有内容安全策略，页面无法加载或访问任何外部来源。
+
+重新启动应用会签发新的 token，已打开的 dashboard 标签页会自动刷新一次来获取。
+
 生成的索引可能包含提示词摘要、文件名和工作目录。分享已安装的应用副本前，建议将 `data/` 目录视为私有数据并进行检查。
 
 手工记录可能包含私人链接或项目名称。`data/manual.json` 已明确排除在版本控制之外。
@@ -330,6 +341,10 @@ PATH
 ```
 
 Kimi Code 命令行为以[官方 command reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-command.html)为准。
+
+### 页面提示本地会话已失效
+
+应用重启后签发了新的会话 token。页面会自动刷新一次来获取新 token。如果提示仍在，可以手动刷新浏览器标签页，并确认地址是 dashboard 的 URL，不是另存出来的 `index.html` 副本。
 
 ### 4388 端口已被占用
 

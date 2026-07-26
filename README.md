@@ -251,6 +251,17 @@ AI Project Finder is designed around local session data:
 - Generated indexes and open-diagnostic files are excluded from Git.
 - Open actions use the installed AI client, Terminal, Explorer or Finder, or a saved URL.
 
+### Local API boundary
+
+Binding to `127.0.0.1` keeps other computers out. On its own it does not stop a website open in the same browser from reaching the local service, so the API applies four further checks:
+
+- Each launch generates a session token. The dashboard page receives it as a `SameSite=Strict`, `HttpOnly` cookie, and an `/api/` request without it is refused.
+- A request whose `Host` header is not the local loopback address is refused, which is what blocks DNS rebinding.
+- Cross-site POST requests are refused, request bodies must be `application/json`, and a cross-origin preflight receives no permission.
+- Responses carry a content security policy that keeps the page from loading or contacting any external origin.
+
+Restarting the application issues a new token, and an open dashboard tab reloads once to pick it up.
+
 The generated index may contain prompt excerpts, filenames, and workspace paths. The `data/` folder should be treated as private and reviewed before sharing an installed copy.
 
 Manual traces may contain private links or project names. `data/manual.json` is intentionally excluded from version control.
@@ -326,6 +337,10 @@ PATH
 ```
 
 Kimi Code command behavior follows its [official command reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-command.html).
+
+### The dashboard reports an expired local session
+
+The application was restarted and issued a new session token. The page reloads once on its own to collect the new one. If the message stays, reload the browser tab, and confirm the address is the dashboard URL rather than a saved copy of `index.html`.
 
 ### Port 4388 is already in use
 

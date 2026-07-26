@@ -442,7 +442,9 @@
         serviceOffline: "LOCAL SERVICE OFFLINE", workspaceUnavailable: "WORKSPACE UNAVAILABLE",
         sessionOpenFailed: "SESSION OPEN FAILED", pathCopied: "PATH COPIED", traceSaved: "TRACE SAVED",
         traceNotSaved: "TRACE NOT SAVED", indexUnavailable: "INDEX UNAVAILABLE",
-        indexRestartHelp: "Restart AI Project Finder to continue searching.", other: "Other"
+        indexRestartHelp: "Restart AI Project Finder to continue searching.", other: "Other",
+        localSessionExpired: "LOCAL SESSION EXPIRED",
+        localSessionExpiredHelp: "Reload this page to reconnect to the local service."
       },
       "zh-CN": {
         pageTitle: "AI Project Finder · 本地项目索引",
@@ -489,7 +491,9 @@
         serviceOffline: "本地服务未连接", workspaceUnavailable: "工作区不可用",
         sessionOpenFailed: "会话打开失败", pathCopied: "路径已复制", traceSaved: "记录已保存",
         traceNotSaved: "记录未保存", indexUnavailable: "索引不可用",
-        indexRestartHelp: "重新启动 AI Project Finder 后可以继续搜索。", other: "其他"
+        indexRestartHelp: "重新启动 AI Project Finder 后可以继续搜索。", other: "其他",
+        localSessionExpired: "本地会话已失效",
+        localSessionExpiredHelp: "刷新页面即可重新连接本地服务。"
       }
     };
     const copy = COPY[LOCALE];
@@ -729,9 +733,34 @@
       toast.timer = window.setTimeout(() => element.classList.remove("show"), 1800);
     }
 
+    // The local API needs the session token this launch handed to the page. A
+    // restarted service invalidates it, and one reload picks up the new one.
+    const REAUTH_FLAG = "apf-reauth";
+    function reloadForNewSession() {
+      try {
+        if (window.sessionStorage.getItem(REAUTH_FLAG) === "1") return false;
+        window.sessionStorage.setItem(REAUTH_FLAG, "1");
+      } catch (_) { return false; }
+      window.location.reload();
+      return true;
+    }
+    function clearReauthFlag() {
+      try { window.sessionStorage.removeItem(REAUTH_FLAG); } catch (_) {}
+    }
+    function unauthorizedError() {
+      const error = new Error("local session token required");
+      error.code = "unauthorized";
+      return error;
+    }
+
     async function loadIndex() {
       const response = await fetch("/api/index", {cache: "no-store"});
+      if (response.status === 403) {
+        if (reloadForNewSession()) return;
+        throw unauthorizedError();
+      }
       if (!response.ok) throw new Error("index unavailable");
+      clearReauthFlag();
       const payload = await response.json();
       state.records = payload.records || [];
       state.summary = payload.summary || {};
@@ -749,7 +778,8 @@
       button.disabled = true;
       button.innerHTML = `↻ <span class="top-action-label">${copy.indexing}</span>`;
       try {
-        const response = await fetch("/api/reindex", {method:"POST"});
+        const response = await fetch("/api/reindex", {method:"POST", headers:{"Content-Type":"application/json"}});
+        if (response.status === 403) { toast(copy.localSessionExpired); reloadForNewSession(); return; }
         if (!response.ok) throw new Error("refresh failed");
         await loadIndex();
         toast(copy.indexRefreshed);
@@ -800,7 +830,10 @@
         const message = messages[payload.mode] || copy.openingSession;
         toast(payload.demo ? formatCopy("demoWouldOpen", {target: demoTargets[payload.mode] || copy.openSession}) : message);
       } catch (error) {
-        if (error.code === "target_unavailable" || error.code === "record_missing") {
+        if (error.code === "unauthorized" || error.code === "cross_origin" || error.code === "invalid_host") {
+          toast(copy.localSessionExpired);
+          reloadForNewSession();
+        } else if (error.code === "target_unavailable" || error.code === "record_missing") {
           await loadIndex().catch(() => {});
           toast(copy.sessionMoved);
         } else if (error.code === "client_open_failed") {
@@ -871,6 +904,11 @@
       const payload = Object.fromEntries(new FormData(event.target).entries());
       try {
         const response = await fetch("/api/manual", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+        if (response.status === 403) {
+          const failure = await response.json().catch(() => ({}));
+          if (failure.error_code === "demo_read_only") throw new Error("demo mode is read only");
+          toast(copy.localSessionExpired); reloadForNewSession(); return;
+        }
         if (!response.ok) throw new Error("save failed");
         event.target.reset(); closeModal(); await loadIndex(); toast(copy.traceSaved);
       } catch (_) { toast(copy.traceNotSaved); }
@@ -880,9 +918,12 @@
       if (event.key === "Escape") closeModal();
     });
 
-    loadIndex().catch(() => {
-      $("#resultList").innerHTML = `<div class="empty"><div><strong>${copy.indexUnavailable}</strong><span>${copy.indexRestartHelp}</span></div></div>`;
-      $("#resultsMeta").textContent = copy.serviceOffline;
+    loadIndex().catch((error) => {
+      const expired = error && error.code === "unauthorized";
+      const heading = expired ? copy.localSessionExpired : copy.indexUnavailable;
+      const help = expired ? copy.localSessionExpiredHelp : copy.indexRestartHelp;
+      $("#resultList").innerHTML = `<div class="empty"><div><strong>${heading}</strong><span>${help}</span></div></div>`;
+      $("#resultsMeta").textContent = expired ? copy.localSessionExpired : copy.serviceOffline;
     });
   </script>
 </body>
