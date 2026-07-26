@@ -106,7 +106,7 @@ Python 应用只使用标准库，无需执行 `pip install`。
 
 #### 下载发行版
 
-1. 下载并解压 [AI Project Finder 中文版 macOS 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_ZH_macOS_v1.3.0.zip)。
+1. 下载并解压 [AI Project Finder v1.3.0 中文版 macOS 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_ZH_macOS_v1.3.0.zip)。
 2. 将文件夹移动到稳定位置，例如 `~/Applications/AI Project Finder`。
 3. 按住 Control 点击 `install.command`，选择 **打开**，完成首次运行确认。
 4. 应用会在 `http://127.0.0.1:4388` 打开。
@@ -138,7 +138,7 @@ chmod +x install.command start.command
 
 #### 下载发行版
 
-1. 下载并解压 [AI Project Finder 中文版 Windows 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_ZH_Windows_v1.3.0.zip)。
+1. 下载并解压 [AI Project Finder v1.3.0 中文版 Windows 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_ZH_Windows_v1.3.0.zip)。
 2. 将文件夹移动到稳定位置，例如 `%LOCALAPPDATA%\Programs\AI Project Finder`。
 3. 双击 `install.bat`。
 4. 应用会在 `http://127.0.0.1:4388` 打开。
