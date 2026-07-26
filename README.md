@@ -106,7 +106,7 @@ The Python application uses only the standard library. No `pip install` step is 
 
 #### Release download
 
-1. Download and unzip [AI Project Finder — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_macOS_v1.3.0.zip).
+1. Download and unzip [AI Project Finder v1.3.0 — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_macOS_v1.3.0.zip).
 2. Move the folder to a stable location, such as `~/Applications/AI Project Finder`.
 3. Control-click `install.command`, select **Open**, and approve the first launch.
 4. The dashboard opens at `http://127.0.0.1:4388`.
@@ -136,7 +136,7 @@ chmod +x install.command start.command
 
 #### Release download
 
-1. Download and unzip [AI Project Finder — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_Windows_v1.3.0.zip).
+1. Download and unzip [AI Project Finder v1.3.0 — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_Windows_v1.3.0.zip).
 2. Move the folder to a stable location, such as `%LOCALAPPDATA%\Programs\AI Project Finder`.
 3. Double-click `install.bat`.
 4. The dashboard opens at `http://127.0.0.1:4388`.

@@ -137,6 +137,18 @@ class VersionConsistencyTest(unittest.TestCase):
                 self.assertEqual(tag, f"v{app.APP_VERSION}", path.name)
                 self.assertIn(f"_v{app.APP_VERSION}.zip", archive, path.name)
 
+    def test_a_download_link_states_its_version_in_the_visible_label(self) -> None:
+        # The version lives in the URL, which a reader of the rendered page
+        # cannot see. The label has to say it too.
+        for path in self.readme_paths():
+            text = path.read_text(encoding="utf-8")
+            labels = re.findall(
+                r"\[([^\]]+)\]\(https://[^)]*/releases/download/[^)]*\.zip\)", text
+            )
+            self.assertTrue(labels, f"{path.name} lists no download links")
+            for label in labels:
+                self.assertIn(f"v{app.APP_VERSION}", label, f"{path.name}: {label}")
+
 
 class KimiDesktopParserTest(unittest.TestCase):
     def test_parser_accepts_conversation_state_and_skips_helpers(self) -> None:
