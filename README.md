@@ -11,7 +11,7 @@ Search by project, client, prompt fragment, workspace, or filename, then return 
 ![Data](https://img.shields.io/badge/data-local_only-111111)
 ![License](https://img.shields.io/badge/license-MIT-111111)
 
-> Current status: v1.2.0 with separate English and Chinese editions for macOS and Windows.
+> Current status: v1.3.0 with separate English and Chinese editions for macOS and Windows.
 
 ## Why AI Project Finder
 
@@ -64,6 +64,15 @@ Search covers:
 
 Search is case-insensitive. Every entered keyword must appear in a matched record.
 
+Two refinements are available in the search field:
+
+```text
+"launch checklist"     an exact phrase rather than separate words
+source:claude          only sessions from one tool
+```
+
+Results are ranked by where a match lands, with recent sessions weighted slightly higher. The search text, source filter, view, date range, and sort order are kept in the address bar, so a result list can be reloaded, bookmarked, or shared as a link on the same computer.
+
 ### Session and project views
 
 **Sessions** shows individual conversations. **Projects** groups multiple AI traces around the same project clue.
@@ -97,7 +106,7 @@ The Python application uses only the standard library. No `pip install` step is 
 
 #### Release download
 
-1. Download and unzip [AI Project Finder — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_EN_macOS_v1.2.0.zip).
+1. Download and unzip [AI Project Finder — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_macOS_v1.3.0.zip).
 2. Move the folder to a stable location, such as `~/Applications/AI Project Finder`.
 3. Control-click `install.command`, select **Open**, and approve the first launch.
 4. The dashboard opens at `http://127.0.0.1:4388`.
@@ -127,7 +136,7 @@ chmod +x install.command start.command
 
 #### Release download
 
-1. Download and unzip [AI Project Finder — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.2.0/AI_Project_Finder_EN_Windows_v1.2.0.zip).
+1. Download and unzip [AI Project Finder — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_Windows_v1.3.0.zip).
 2. Move the folder to a stable location, such as `%LOCALAPPDATA%\Programs\AI Project Finder`.
 3. Double-click `install.bat`.
 4. The dashboard opens at `http://127.0.0.1:4388`.
@@ -188,11 +197,17 @@ Select **Add trace** and save:
 - Conversation URL or local path
 - Search keywords
 
+A saved trace carries **Edit** and **Delete** actions on its result card, so a wrong link or title can be corrected without opening the file by hand. Delete asks for a second click before it removes the record.
+
 Manual traces are written to `data/manual.json`. This private runtime file is created automatically on the first saved trace and is excluded from Git. The repository includes `data/manual.example.json` as an empty template.
 
 ### Refresh the index
 
 Use **Refresh** after creating new sessions, installing another AI tool, moving a session folder, or changing a source path.
+
+A refresh re-reads only the transcripts whose size or timestamp changed since the last one, so it usually completes in well under a second. Parsed records are kept in `data/parse-cache.json`, another private runtime file excluded from Git; deleting it forces a full re-read.
+
+The refresh that runs at launch happens in the background. An open dashboard notices when it finishes and reloads the list on its own.
 
 ### Custom source paths
 
@@ -241,6 +256,34 @@ For multiple Claude Desktop profiles on macOS, an optional environment variable 
 export AI_PROJECT_FINDER_CLAUDE_PROFILES="Claude,Claude-Work"
 ```
 
+### Project naming
+
+A record's project label comes from its workspace path. Folder conventions differ per person, so the markers are configurable:
+
+```json
+{
+  "naming": {
+    "project_markers": ["projects"],
+    "client_markers": ["clients", "\u5ba2\u6237"],
+    "dated_workspace_markers": ["codex"],
+    "ignore_dirs": ["documents", "downloads", "desktop", "tmp", "new-chat"]
+  }
+}
+```
+
+- `project_markers`: the folder after this one names the project, as in `.../projects/atlas-launch`.
+- `client_markers`: the folder after this one names a client. A numbered prefix is allowed, so `clients` also matches a folder named `01 clients`.
+- `dated_workspace_markers`: a workspace that files work under a date folder, as in `.../codex/2026-07-25/atlas-launch`.
+- `ignore_dirs`: folder names too generic to stand as a project name. The home folder is always treated this way.
+
+A folder that is really a slugified request, such as `clone-https-github-com-someone-project`, is not accepted as a project name. When the path names nothing, the record stays unclassified rather than taking a name summarised from its opening request: that produced one throwaway project per session and buried the real ones.
+
+### Assigning work to a project
+
+Any result carries an **Assign** action. Give it a project name, and choose whether it applies to that one session or to everything in its working folder. A folder assignment also covers sessions created there later. A project group carries **Rename**, which moves every trace in it to the new name. Clearing the name removes the assignment and restores the derived label.
+
+Assignments are written to `data/projects.json`, a private runtime file excluded from Git. They survive a refresh and are re-applied on every build, so they are never frozen into the parse cache.
+
 ## Privacy and Security
 
 AI Project Finder is designed around local session data:
@@ -250,6 +293,17 @@ AI Project Finder is designed around local session data:
 - The application has no upload or analytics endpoint.
 - Generated indexes and open-diagnostic files are excluded from Git.
 - Open actions use the installed AI client, Terminal, Explorer or Finder, or a saved URL.
+
+### Local API boundary
+
+Binding to `127.0.0.1` keeps other computers out. On its own it does not stop a website open in the same browser from reaching the local service, so the API applies four further checks:
+
+- Each launch generates a session token. The dashboard page receives it as a `SameSite=Strict`, `HttpOnly` cookie, and an `/api/` request without it is refused.
+- A request whose `Host` header is not the local loopback address is refused, which is what blocks DNS rebinding.
+- Cross-site POST requests are refused, request bodies must be `application/json`, and a cross-origin preflight receives no permission.
+- Responses carry a content security policy that keeps the page from loading or contacting any external origin.
+
+Restarting the application issues a new token, and an open dashboard tab reloads once to pick it up.
 
 The generated index may contain prompt excerpts, filenames, and workspace paths. The `data/` folder should be treated as private and reviewed before sharing an installed copy.
 
@@ -326,6 +380,10 @@ PATH
 ```
 
 Kimi Code command behavior follows its [official command reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-command.html).
+
+### The dashboard reports an expired local session
+
+The application was restarted and issued a new session token. The page reloads once on its own to collect the new one. If the message stays, reload the browser tab, and confirm the address is the dashboard URL rather than a saved copy of `index.html`.
 
 ### Port 4388 is already in use
 

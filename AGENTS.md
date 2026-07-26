@@ -25,7 +25,10 @@ synthetic or privacy-safe visual verification.
 - `demo/`: synthetic fixtures and the demo recording script.
 - `tests/`: cross-platform parser, privacy, Demo Mode, and HTTP tests.
 - `scripts/build_release.py`: deterministic English/Chinese macOS/Windows packaging.
-- `outputs/`, `backups/`, generated indexes, logs, and manual traces are local and ignored.
+- `outputs/`, `backups/`, generated indexes, the parse cache, project assignments,
+  logs, and manual traces are local and ignored.
+- `/api/` requires the per-launch session token, a loopback `Host`, and a same-origin
+  POST. Changing the handler means re-checking `LocalApiBoundaryTest`.
 
 ## Boundaries
 
@@ -40,6 +43,7 @@ synthetic or privacy-safe visual verification.
 
 ## Current state
 
-The current public release is v1.2.0: English and Simplified Chinese editions
-for macOS and Windows. Release assets are published on GitHub; later `main`
-commits may contain documentation-only presentation updates.
+The current public release is v1.3.0: English and Simplified Chinese editions
+for macOS and Windows. `APP_VERSION` in `app.py` is the single source for the
+release number; the README status lines and download links must agree with it,
+and `VersionConsistencyTest` fails when they drift.
