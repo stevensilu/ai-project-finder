@@ -276,7 +276,13 @@ A record's project label comes from its workspace path. Folder conventions diffe
 - `dated_workspace_markers`: a workspace that files work under a date folder, as in `.../codex/2026-07-25/atlas-launch`.
 - `ignore_dirs`: folder names too generic to stand as a project name. The home folder is always treated this way.
 
-When the path yields nothing, the label is guessed from the opening request, and the interface shows **Unclassified project** when even that is empty.
+A folder that is really a slugified request, such as `clone-https-github-com-someone-project`, is not accepted as a project name. When the path names nothing, the record stays unclassified rather than taking a name summarised from its opening request: that produced one throwaway project per session and buried the real ones.
+
+### Assigning work to a project
+
+Any result carries an **Assign** action. Give it a project name, and choose whether it applies to that one session or to everything in its working folder. A folder assignment also covers sessions created there later. A project group carries **Rename**, which moves every trace in it to the new name. Clearing the name removes the assignment and restores the derived label.
+
+Assignments are written to `data/projects.json`, a private runtime file excluded from Git. They survive a refresh and are re-applied on every build, so they are never frozen into the parse cache.
 
 ## Privacy and Security
 

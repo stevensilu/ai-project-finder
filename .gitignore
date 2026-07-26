@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 data/index.json
 data/parse-cache.json
+data/projects.json
 data/manual.json
 data/open.log
 data/open.previous.log

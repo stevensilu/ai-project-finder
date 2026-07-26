@@ -131,6 +131,7 @@ INDEX_CACHE: dict[str, Any] = {"key": None, "payload": None}
 INDEX_CACHE_LOCK = threading.Lock()
 BUILD_LOCK = threading.Lock()
 PARSE_CACHE_FILE = DATA_DIR / "parse-cache.json"
+PROJECTS_FILE = DATA_DIR / "projects.json"
 # Bump when a parser changes what it extracts, so stale entries are discarded.
 PARSE_CACHE_VERSION = 2
 
@@ -386,13 +387,34 @@ def find_indexed_record(record_id: str) -> dict[str, Any] | None:
     )
 
 
-def system_open_command(target: str) -> list[str]:
+def system_open_target(target: str) -> None:
+    """Hand a path or URL to the desktop with no shell in between.
+
+    The Windows branch used to run `cmd.exe /c start "" <target>`. A folder or
+    URL containing & or ^ would then be read as another command, so the value
+    now goes to ShellExecute as a single argument.
+    """
     if IS_WINDOWS:
-        return ["cmd.exe", "/d", "/s", "/c", "start", "", target]
+        start_file = getattr(os, "startfile", None)
+        if start_file is None:
+            raise FileNotFoundError("system opener unavailable")
+        start_file(target)
+        return
     opener = "/usr/bin/open" if Path("/usr/bin/open").exists() else shutil.which("xdg-open")
     if not opener:
         raise FileNotFoundError("system opener unavailable")
-    return [str(opener), target]
+    completed = subprocess.run(
+        [str(opener), target],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or "").strip()
+        raise OSError(detail or f"system opener exited with {completed.returncode}")
 
 
 def record_open_event(
@@ -630,7 +652,7 @@ def kimi_cli_launcher(session_id: str) -> Path:
     return launcher
 
 
-def build_open_command(record: dict[str, Any], action: str) -> tuple[list[str], str]:
+def build_open_target(record: dict[str, Any], action: str) -> tuple[str, str]:
     if action == "workspace":
         raw_path = str(record.get("cwd") or "").strip()
         if not raw_path:
@@ -640,7 +662,7 @@ def build_open_command(record: dict[str, Any], action: str) -> tuple[list[str], 
             workspace = workspace.parent
         if not workspace.is_dir():
             raise FileNotFoundError("workspace unavailable")
-        return system_open_command(str(workspace)), "workspace"
+        return str(workspace), "workspace"
 
     source = str(record.get("source") or "").lower()
     session_id = str(record.get("session_id") or "").strip()
@@ -655,12 +677,12 @@ def build_open_command(record: dict[str, Any], action: str) -> tuple[list[str], 
     if action == "cli":
         if source != "kimi":
             raise ValueError("CLI open is only available for Kimi Code sessions")
-        return system_open_command(str(kimi_cli_launcher(session_id))), "kimi-cli"
+        return str(kimi_cli_launcher(session_id)), "kimi-cli"
     if action != "session":
         raise ValueError("unsupported action")
 
     if source == "codex":
-        return system_open_command(f"codex://threads/{encoded_id}"), "codex"
+        return f"codex://threads/{encoded_id}", "codex"
     if source == "claude":
         # The active profile may have changed since the index was built.
         # Resolve it at click time so CC Switch and the official profile do not
@@ -669,25 +691,26 @@ def build_open_command(record: dict[str, Any], action: str) -> tuple[list[str], 
         desktop_session_id = str(active_metadata.get("desktop_session_id") or "").strip()
         if SESSION_ID_RE.fullmatch(desktop_session_id):
             encoded_desktop_id = quote(desktop_session_id, safe="")
-            return system_open_command(
-                f"claude://claude.ai/claude-code-desktop/{encoded_desktop_id}"
-            ), "claude-desktop"
-        return system_open_command(f"claude://resume?session={encoded_id}"), "claude"
+            return (
+                f"claude://claude.ai/claude-code-desktop/{encoded_desktop_id}",
+                "claude-desktop",
+            )
+        return f"claude://resume?session={encoded_id}", "claude"
     if source == "kimi":
         origin = find_kimi_web_origin()
         if not origin:
             raise FileNotFoundError("Kimi Web UI unavailable")
-        return system_open_command(f"{origin}/sessions/{encoded_id}"), "kimi-web"
+        return f"{origin}/sessions/{encoded_id}", "kimi-web"
     if source == "kimi-desktop":
-        return system_open_command("kimi-work://home"), "kimi-desktop"
+        return "kimi-work://home", "kimi-desktop"
 
     location = str(record.get("session_path") or record.get("cwd") or "").strip()
     parsed = urlparse(location)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
-        return system_open_command(location), "web"
+        return location, "web"
     local_target = Path(location).expanduser()
     if local_target.exists():
-        return system_open_command(str(local_target)), "local"
+        return str(local_target), "local"
     raise FileNotFoundError("session target unavailable")
 
 
@@ -695,19 +718,8 @@ def launch_record(record: dict[str, Any], action: str) -> str:
     try:
         if action == "session" and str(record.get("source") or "").lower() == "kimi":
             ensure_kimi_web_origin()
-        command, mode = build_open_command(record, action)
-        completed = subprocess.run(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=8,
-            check=False,
-        )
-        if completed.returncode != 0:
-            detail = (completed.stderr or "").strip()
-            raise OSError(detail or f"system opener exited with {completed.returncode}")
+        target, mode = build_open_target(record, action)
+        system_open_target(target)
         record_open_event(record, action, outcome="opened", mode=mode)
         return mode
     except Exception as exc:
@@ -867,6 +879,68 @@ def is_ignored_dir(name: str) -> bool:
     return lowered in {item.lower() for item in NAMING_RULES.get("ignore_dirs", [])}
 
 
+def looks_like_a_project_name(label: str) -> bool:
+    """Reject a folder that is really a slugified sentence or a pasted link.
+
+    Codex names a working folder after the opening request, which produces
+    labels such as clone-https-github-com-someone-project. Those are unique per
+    session, so accepting them fills the project list with one-off entries.
+    """
+    text = str(label).strip()
+    if len(text) < 2 or len(text) > 48:
+        return False
+    lowered = text.lower()
+    if "http" in lowered or "://" in lowered or lowered.startswith("www."):
+        return False
+    return text.count("-") < 4
+
+
+def workspace_key(cwd: str) -> str:
+    """A stable key for one working folder, so assignments survive small differences."""
+    text = str(cwd or "").strip()
+    if not text:
+        return ""
+    normalized = os.path.normpath(os.path.expanduser(text))
+    return normalized.casefold() if IS_WINDOWS or Path("/Applications").exists() else normalized
+
+
+def load_project_overrides() -> dict[str, dict[str, str]]:
+    try:
+        payload = json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"by_workspace": {}, "by_record": {}}
+    if not isinstance(payload, dict):
+        return {"by_workspace": {}, "by_record": {}}
+    return {
+        "by_workspace": payload.get("by_workspace") if isinstance(payload.get("by_workspace"), dict) else {},
+        "by_record": payload.get("by_record") if isinstance(payload.get("by_record"), dict) else {},
+    }
+
+
+def save_project_overrides(overrides: dict[str, dict[str, str]]) -> None:
+    write_json_atomically(PROJECTS_FILE, overrides, prefix="projects-")
+
+
+def assigned_project(record: dict[str, Any], overrides: dict[str, dict[str, str]]) -> str:
+    by_record = overrides.get("by_record", {})
+    named = str(by_record.get(str(record.get("id") or "")) or "").strip()
+    if named:
+        return named
+    by_workspace = overrides.get("by_workspace", {})
+    return str(by_workspace.get(workspace_key(str(record.get("cwd") or ""))) or "").strip()
+
+
+def apply_project_overrides(
+    records: list[dict[str, Any]], overrides: dict[str, dict[str, str]]
+) -> None:
+    """Let a saved assignment win over the derived label, on every build."""
+    for record in records:
+        derived = str(record.get("derived_project") or "")
+        chosen = assigned_project(record, overrides)
+        record["project"] = chosen or derived
+        record["project_source"] = "assigned" if chosen else "derived"
+
+
 def canonical_project(cwd: str, title: str) -> tuple[str, str]:
     normalized = cwd.rstrip("/")
     parts = [
@@ -891,19 +965,18 @@ def canonical_project(cwd: str, title: str) -> tuple[str, str]:
         tail = parts[dated_at + 1 :]
         if tail and DATE_PART_RE.match(tail[0]):
             tail = tail[1:]
-        if tail and not is_ignored_dir(tail[-1]):
+        if tail and not is_ignored_dir(tail[-1]) and looks_like_a_project_name(tail[-1]):
             return tail[-1], customer
 
     basename = Path(normalized).name if normalized else ""
-    if basename and not is_ignored_dir(basename):
+    if basename and not is_ignored_dir(basename) and looks_like_a_project_name(basename):
         return basename, customer
 
-    # Nothing in the path names the work, so guess from the request text. When
-    # even that yields nothing the label stays empty and the interface names it
-    # in the reader's own language.
-    hint = clean_user_text(title)
-    words = re.findall(r"[A-Za-z][A-Za-z0-9._-]{2,}|[\u4e00-\u9fff]{2,12}", hint)
-    return " ".join(words[:4])[:64], customer
+    # Nothing in the path names the work. Summarising the opening request here
+    # used to invent a project per session, which is what left the project view
+    # full of one-off entries. An unnamed record stays unnamed, and can be
+    # assigned to a project from the interface.
+    return "", customer
 
 
 def find_artifacts(text: str) -> list[str]:
@@ -950,6 +1023,7 @@ def make_record(
         "session_path": session_path,
         "cwd": cwd,
         "project": project,
+        "derived_project": project,
         "customer": customer,
         "title": clean_user_text(title)[:220] or project,
         "excerpt": excerpt,
@@ -1322,6 +1396,7 @@ def build_index_now() -> dict[str, Any]:
         )
         if row.get("project"):
             record["project"] = str(row["project"])
+            record["derived_project"] = str(row["project"])
         # Marked so the interface can offer edit and delete, and can label the
         # origin in the reader's own language.
         record["manual"] = True
@@ -1329,6 +1404,8 @@ def build_index_now() -> dict[str, Any]:
         record["notes"] = str(row.get("notes") or "")
         record["manual_source"] = str(row.get("source") or "")
         records.append(record)
+
+    apply_project_overrides(records, load_project_overrides())
 
     deduplicated: dict[str, dict[str, Any]] = {}
     for record in records:
@@ -1615,6 +1692,23 @@ class FinderHandler(SimpleHTTPRequestHandler):
                     HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
             return
+        if parsed.path in {"/api/project/assign", "/api/project/rename"}:
+            if DEMO_MODE:
+                self.send_json(
+                    {
+                        "ok": False,
+                        "error": "demo mode is read only",
+                        "error_code": "demo_read_only",
+                    },
+                    HTTPStatus.FORBIDDEN,
+                )
+                return
+            row = self.read_body_json()
+            if parsed.path == "/api/project/assign":
+                self.assign_project(row)
+            else:
+                self.rename_project(row)
+            return
         if parsed.path in {"/api/manual", "/api/manual/update", "/api/manual/delete"}:
             if DEMO_MODE:
                 self.send_json(
@@ -1635,6 +1729,66 @@ class FinderHandler(SimpleHTTPRequestHandler):
                 self.delete_manual_trace(row)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def assign_project(self, row: dict[str, Any]) -> None:
+        """Attach one session, or a whole working folder, to a named project."""
+        record = find_indexed_record(str(row.get("record_id") or ""))
+        if record is None:
+            self.send_json(
+                {"ok": False, "error": "record not found", "error_code": "record_missing"},
+                HTTPStatus.NOT_FOUND,
+            )
+            return
+        name = str(row.get("project") or "").strip()[:120]
+        scope = "workspace" if str(row.get("scope") or "") == "workspace" else "record"
+        folder = workspace_key(str(record.get("cwd") or ""))
+        if scope == "workspace" and not folder:
+            scope = "record"
+        overrides = load_project_overrides()
+        bucket = "by_workspace" if scope == "workspace" else "by_record"
+        key = folder if scope == "workspace" else str(record.get("id") or "")
+        if name:
+            overrides[bucket][key] = name
+        else:
+            # An empty name clears the assignment at both levels, so a record
+            # cannot stay pinned by a folder rule the reader just cleared.
+            overrides["by_record"].pop(str(record.get("id") or ""), None)
+            if folder:
+                overrides["by_workspace"].pop(folder, None)
+        save_project_overrides(overrides)
+        payload = build_index()
+        self.send_json({"ok": True, "project": name, "scope": scope, "summary": payload["summary"]})
+
+    def rename_project(self, row: dict[str, Any]) -> None:
+        previous = str(row.get("from") or "").strip()
+        name = str(row.get("to") or "").strip()[:120]
+        if not previous or not name:
+            self.send_json(
+                {"ok": False, "error": "both names are required"}, HTTPStatus.BAD_REQUEST
+            )
+            return
+        records = [
+            record
+            for record in load_index_payload().get("records", [])
+            if isinstance(record, dict) and str(record.get("project") or "") == previous
+        ]
+        if not records:
+            self.send_json(
+                {"ok": False, "error": "project not found", "error_code": "project_missing"},
+                HTTPStatus.NOT_FOUND,
+            )
+            return
+        overrides = load_project_overrides()
+        for record in records:
+            folder = workspace_key(str(record.get("cwd") or ""))
+            # Pinning the folder means later sessions in it inherit the name.
+            if folder:
+                overrides["by_workspace"][folder] = name
+            else:
+                overrides["by_record"][str(record.get("id") or "")] = name
+        save_project_overrides(overrides)
+        payload = build_index()
+        self.send_json({"ok": True, "project": name, "records": len(records), "summary": payload["summary"]})
 
     def save_manual_traces(self, rows: list[dict[str, Any]]) -> None:
         write_json_atomically(MANUAL_FILE, rows, prefix="manual-")

@@ -404,6 +404,29 @@
       <div class="modal-actions"><button class="form-button" id="cancelModal" type="button" data-i18n="cancel">Cancel</button><button class="form-button primary" type="submit" data-i18n="saveTrace">Save trace</button></div>
     </form>
   </div>
+  <div class="modal-backdrop" id="assignBackdrop" role="dialog" aria-modal="true" aria-labelledby="assignTitle">
+    <form class="modal" id="assignForm">
+      <div class="modal-head">
+        <div><h2 id="assignTitle" data-i18n="assignProject">Assign project</h2><p id="assignHint"></p></div>
+        <button class="close" id="closeAssign" type="button" aria-label="Close" data-i18n-aria="close">×</button>
+      </div>
+      <div class="form-grid">
+        <div class="field full">
+          <label for="assignName" data-i18n="projectName">Project</label>
+          <input id="assignName" name="project" list="knownProjects" autocomplete="off">
+          <datalist id="knownProjects"></datalist>
+        </div>
+        <div class="field full" id="assignScopeField">
+          <label data-i18n="applyTo">Apply to</label>
+          <div class="segmented" id="assignScope">
+            <button class="active" type="button" data-scope="record" data-i18n="thisSession">This session</button>
+            <button type="button" data-scope="workspace" data-i18n="thisWorkspace">This workspace</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions"><button class="form-button" id="cancelAssign" type="button" data-i18n="cancel">Cancel</button><button class="form-button primary" type="submit" data-i18n="saveProject">Save</button></div>
+    </form>
+  </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="/vendor/js/gsap.min.js"></script>
@@ -463,7 +486,14 @@
         editTrace: "Edit", editTraceTitle: "Edit trace", deleteTrace: "Delete", confirmDelete: "Confirm delete",
         traceUpdated: "TRACE UPDATED", traceDeleted: "TRACE DELETED", traceNotDeleted: "TRACE NOT DELETED",
         showingOf: "SHOWING {shown} OF {total}", showMore: "Show {count} more",
-        moreTraces: "+{count} more", showLess: "Show less"
+        moreTraces: "+{count} more", showLess: "Show less",
+        assignProject: "Assign project", renameProject: "Rename project",
+        assign: "Assign", rename: "Rename", projectName: "Project", saveProject: "Save",
+        applyTo: "Apply to", thisSession: "This session", thisWorkspace: "This workspace",
+        assignHintRecord: "Name the project this belongs to. Leave it empty to clear the assignment.",
+        assignHintProject: "The new name applies to every trace in this project.",
+        projectAssigned: "PROJECT ASSIGNED", projectCleared: "ASSIGNMENT CLEARED",
+        projectRenamed: "PROJECT RENAMED", assignFailed: "ASSIGNMENT NOT SAVED"
       },
       "zh-CN": {
         pageTitle: "AI Project Finder · 本地项目索引",
@@ -517,7 +547,14 @@
         editTrace: "编辑", editTraceTitle: "编辑记录", deleteTrace: "删除", confirmDelete: "确认删除",
         traceUpdated: "记录已更新", traceDeleted: "记录已删除", traceNotDeleted: "记录未删除",
         showingOf: "显示 {shown} / 共 {total}", showMore: "再显示 {count} 条",
-        moreTraces: "+{count} 条", showLess: "收起"
+        moreTraces: "+{count} 条", showLess: "收起",
+        assignProject: "归入项目", renameProject: "重命名项目",
+        assign: "归入", rename: "重命名", projectName: "项目名", saveProject: "保存",
+        applyTo: "应用范围", thisSession: "本次会话", thisWorkspace: "该工作目录",
+        assignHintRecord: "填写它所属的项目名。留空则清除归属。",
+        assignHintProject: "新名称会应用到该项目下的所有记录。",
+        projectAssigned: "已归入项目", projectCleared: "已清除归属",
+        projectRenamed: "项目已重命名", assignFailed: "归属未保存"
       }
     };
     const copy = COPY[LOCALE];
@@ -546,7 +583,7 @@
     const state = {
       records: [], summary: {}, generatedAt: null, query: "", sources: new Set(),
       view: "sessions", range: "all", sort: "relevance", demo: false, locale: LOCALE,
-      limit: PAGE_SIZE, editingTraceId: ""
+      limit: PAGE_SIZE, editingTraceId: "", assigning: null
     };
     const labels = { codex: "Codex", claude: "Claude", kimi: "Kimi Code", "kimi-desktop": "Kimi Desktop", other: copy.other };
     const root = document.documentElement;
@@ -745,6 +782,7 @@
       const kimiCliButton = record.source === "kimi" ? `<button class="action-button" type="button" data-open-action="cli" data-record-id="${recordId}">${copy.openCli}</button>` : "";
       const openLabel = escapeHtml(record.source === "kimi-desktop" ? copy.openKimiDesktop : copy.openSession);
       const manualId = escapeHtml(record.manual_id || "");
+      const assignButton = `<button class="action-button" type="button" data-assign-record="${recordId}">${copy.assign}</button>`;
       const manualButtons = record.manual
         ? `<button class="action-button" type="button" data-manual-edit="${manualId}">${copy.editTrace}</button><button class="action-button" type="button" data-manual-delete="${manualId}">${copy.deleteTrace}</button>`
         : "";
@@ -753,7 +791,7 @@
         <div class="path-row"><span class="path-label">${copy.workspace}</span><span class="path" title="${escapeHtml(location)}">${highlight(location, state.query)}</span><button class="copy" type="button" data-copy="${encodeURIComponent(location)}">${copy.copyPath}</button></div>
         ${excerpt ? `<div class="excerpt">${highlight(excerpt, state.query)}</div>` : ""}
         ${artifacts ? `<div class="artifact-list">${artifacts}</div>` : ""}
-        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(displayOrigin(record))}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${manualButtons}${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
+        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(displayOrigin(record))}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${assignButton}${manualButtons}${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
       </article>`;
     }
 
@@ -764,7 +802,11 @@
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(record);
       });
-      return [...groups.entries()].sort((a,b) => String(b[1][0].updated_at).localeCompare(String(a[1][0].updated_at))).map(([project, rows], index) => {
+      const unclassified = copy.unclassifiedProject;
+      return [...groups.entries()].sort((a, b) => {
+        if ((a[0] === unclassified) !== (b[0] === unclassified)) return a[0] === unclassified ? 1 : -1;
+        return String(b[1][0].updated_at).localeCompare(String(a[1][0].updated_at));
+      }).map(([project, rows], index) => {
         const sources = [...new Set(rows.map((row) => row.source))];
         const workspaces = [...new Set(rows.map((row) => row.cwd).filter(Boolean))];
         const sourceBadges = sources.map((source) => badge({source, source_label: labels[source] || source})).join("");
@@ -780,12 +822,15 @@
           : "";
         const latestId = escapeHtml(rows[0].id || "");
         const workspaceButton = workspaces.length ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${latestId}">${copy.openWorkspace}</button>` : "";
+        const renameButton = project === copy.unclassifiedProject
+          ? ""
+          : `<button class="action-button" type="button" data-rename-project="${escapeHtml(project)}">${copy.rename}</button>`;
         const projectSummary = [
           formatCopy("traces", {count: rows.length}),
           formatCopy("workspaces", {count: workspaces.length}),
           formatCopy("latest", {date: relativeDate(rows[0].updated_at)})
         ].join(" / ");
-        return `<article class="result-card project-card tech-reveal"><div class="project-head"><span class="record-no">${String(index + 1).padStart(3, "0")}</span><div><h4>${highlight(project, state.query)}</h4><div class="project-summary">${projectSummary}</div></div><div class="project-side"><div class="source-stack">${sourceBadges}</div>${workspaceButton}</div></div><div class="session-lines">${lines}${moreButton}</div></article>`;
+        return `<article class="result-card project-card tech-reveal"><div class="project-head"><span class="record-no">${String(index + 1).padStart(3, "0")}</span><div><h4>${highlight(project, state.query)}</h4><div class="project-summary">${projectSummary}</div></div><div class="project-side"><div class="source-stack">${sourceBadges}</div>${renameButton}${workspaceButton}</div></div><div class="session-lines">${lines}${moreButton}</div></article>`;
       }).join("");
     }
 
@@ -942,8 +987,59 @@
     }
 
     let lastFocusedElement = null;
+    function openDialog() {
+      return document.querySelector(".modal-backdrop.open");
+    }
     function focusableModalFields() {
-      return [...$("#manualForm").querySelectorAll("input, textarea, button")].filter((item) => !item.disabled);
+      const dialog = openDialog();
+      if (!dialog) return [];
+      return [...dialog.querySelectorAll("input, textarea, button")].filter((item) => !item.disabled);
+    }
+
+    // Assigning a session, or its whole working folder, to a named project is
+    // the only reliable way to group work the folder layout does not describe.
+    function openAssign(record, projectName = "") {
+      lastFocusedElement = document.activeElement;
+      state.assigning = record
+        ? {mode: "record", recordId: record.id || "", hasWorkspace: Boolean(record.cwd), scope: "record"}
+        : {mode: "project", project: projectName, scope: "record"};
+      const known = [...new Set(state.records.map((item) => item.project).filter(Boolean))].sort();
+      $("#knownProjects").innerHTML = known.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
+      $("#assignTitle").textContent = record ? copy.assignProject : copy.renameProject;
+      $("#assignHint").textContent = record
+        ? copy.assignHintRecord
+        : copy.assignHintProject;
+      $("#assignName").value = record ? (record.project_source === "assigned" ? record.project : "") : projectName;
+      $("#assignScopeField").hidden = !record || !record.cwd;
+      $("#assignScope").querySelectorAll("button").forEach((item) => item.classList.toggle("active", item.dataset.scope === "record"));
+      $("#assignBackdrop").classList.add("open");
+      $("#assignName").focus();
+    }
+    function closeAssign() {
+      $("#assignBackdrop").classList.remove("open");
+      state.assigning = null;
+      if (lastFocusedElement && document.contains(lastFocusedElement)) lastFocusedElement.focus();
+      lastFocusedElement = null;
+    }
+    async function submitAssign() {
+      const assigning = state.assigning;
+      if (!assigning) return;
+      const name = $("#assignName").value.trim();
+      const request = assigning.mode === "project"
+        ? {path: "/api/project/rename", body: {from: assigning.project, to: name}}
+        : {path: "/api/project/assign", body: {record_id: assigning.recordId, project: name, scope: assigning.scope}};
+      if (assigning.mode === "project" && !name) { closeAssign(); return; }
+      try {
+        const response = await fetch(request.path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(request.body)});
+        if (response.status === 403) { toast(copy.localSessionExpired); reloadForNewSession(); return; }
+        if (!response.ok) throw new Error("assign failed");
+        const cleared = assigning.mode === "record" && !name;
+        closeAssign();
+        await loadIndex();
+        toast(cleared ? copy.projectCleared : assigning.mode === "project" ? copy.projectRenamed : copy.projectAssigned);
+      } catch (_) {
+        toast(copy.assignFailed);
+      }
     }
     function openModal(record = null) {
       lastFocusedElement = document.activeElement;
@@ -1073,6 +1169,17 @@
           : formatCopy("moreTraces", {count: lines.querySelectorAll(".session-line.extra").length});
         return;
       }
+      const assignButtonEl = event.target.closest("[data-assign-record]");
+      if (assignButtonEl) {
+        const record = state.records.find((item) => String(item.id || "") === assignButtonEl.dataset.assignRecord);
+        if (record) openAssign(record);
+        return;
+      }
+      const renameButtonEl = event.target.closest("[data-rename-project]");
+      if (renameButtonEl) {
+        openAssign(null, renameButtonEl.dataset.renameProject);
+        return;
+      }
       const editButton = event.target.closest("[data-manual-edit]");
       if (editButton) {
         const record = state.records.find((item) => String(item.manual_id || "") === editButton.dataset.manualEdit);
@@ -1096,6 +1203,15 @@
     $("#refreshButton").addEventListener("click", refreshIndex);
     $("#addButton").addEventListener("click", () => openModal());
     $("#closeModal").addEventListener("click", closeModal);
+    $("#closeAssign").addEventListener("click", closeAssign);
+    $("#cancelAssign").addEventListener("click", closeAssign);
+    $("#assignBackdrop").addEventListener("click", (event) => { if (event.target === $("#assignBackdrop")) closeAssign(); });
+    $("#assignScope").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-scope]"); if (!button || !state.assigning) return;
+      state.assigning.scope = button.dataset.scope;
+      $("#assignScope").querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
+    });
+    $("#assignForm").addEventListener("submit", (event) => { event.preventDefault(); submitAssign(); });
     $("#cancelModal").addEventListener("click", closeModal);
     $("#modalBackdrop").addEventListener("click", (event) => { if (event.target === $("#modalBackdrop")) closeModal(); });
     $("#manualForm").addEventListener("submit", async (event) => {
@@ -1144,7 +1260,7 @@
 
     document.addEventListener("keydown", (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("#search").focus(); }
-      if (event.key === "Escape") closeModal();
+      if (event.key === "Escape") { closeModal(); closeAssign(); }
       trapModalFocus(event);
     });
 

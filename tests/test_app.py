@@ -41,21 +41,24 @@ class AutomaticPathsTest(unittest.TestCase):
         self.assertEqual(paths[0], Path.home() / "custom-sessions")
         self.assertEqual(paths[1], Path("/tmp/apf-fixture/sessions"))
 
-    def test_windows_system_opener_uses_cmd_start(self) -> None:
-        with patch.object(app, "IS_WINDOWS", True):
-            command = app.system_open_command("codex://threads/demo-session")
-        self.assertEqual(
-            command,
-            [
-                "cmd.exe",
-                "/d",
-                "/s",
-                "/c",
-                "start",
-                "",
-                "codex://threads/demo-session",
-            ],
-        )
+    def test_windows_opens_through_the_shell_api_without_a_command_line(self) -> None:
+        with (
+            patch.object(app, "IS_WINDOWS", True),
+            patch("os.startfile", create=True) as start_file,
+            patch.object(app.subprocess, "run", side_effect=AssertionError("spawned a shell")),
+        ):
+            app.system_open_target("codex://threads/demo-session")
+        start_file.assert_called_once_with("codex://threads/demo-session")
+
+    def test_a_windows_path_with_a_shell_character_stays_one_value(self) -> None:
+        # cmd.exe would have read everything after & as a second command.
+        target = r"C:\Users\Example\R&D\launch"
+        with (
+            patch.object(app, "IS_WINDOWS", True),
+            patch("os.startfile", create=True) as start_file,
+        ):
+            app.system_open_target(target)
+        start_file.assert_called_once_with(target)
 
     def test_windows_kimi_desktop_runtime_discovery(self) -> None:
         with patch.object(app, "IS_WINDOWS", True), patch.dict(
@@ -390,18 +393,33 @@ class ProjectNamingTest(unittest.TestCase):
             "orchid-site",
         )
 
-    def test_an_ignored_folder_falls_back_to_the_request_text(self) -> None:
-        # The guess keeps the first four words of the request.
+    def test_an_unnamed_path_does_not_invent_a_project_from_the_request(self) -> None:
+        # Summarising the request here produced one throwaway project per
+        # session, which is what buried the real ones.
         self.assertEqual(
             app.canonical_project(
                 str(Path.home() / "Downloads"), "rewrite the launch brief for Northwind"
             )[0],
-            "rewrite the launch brief",
+            "",
         )
 
     def test_an_unnamed_project_stays_empty_for_the_interface_to_label(self) -> None:
         # A Chinese placeholder here would reach the English edition unchanged.
         self.assertEqual(app.canonical_project(str(Path.home()), "")[0], "")
+
+    def test_a_slugified_request_folder_is_not_treated_as_a_project(self) -> None:
+        for folder in (
+            "clone-https-github-com-someone-project",
+            "let-s-set-up-a-scheduled",
+            "https-x-com-someone",
+        ):
+            self.assertEqual(app.canonical_project(f"/srv/Codex/2026-07-25/{folder}", "")[0], "")
+
+    def test_an_ordinary_hyphenated_folder_is_still_a_project(self) -> None:
+        self.assertEqual(
+            app.canonical_project("/srv/Codex/2026-07-25/ai-project-finder", "")[0],
+            "ai-project-finder",
+        )
 
     def test_markers_come_from_configuration(self) -> None:
         with patch.object(
@@ -752,6 +770,110 @@ class DemoHTTPIsolationTest(DemoServerTestCase):
         self.assertFalse(app.MANUAL_FILE.exists())
 
 
+class ProjectAssignmentTest(unittest.TestCase):
+    """An assignment is how work gets grouped when the folder layout cannot say."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.sessions = root / "sessions"
+        self.sessions.mkdir(parents=True)
+        for attribute, value in (
+            ("DATA_DIR", root),
+            ("INDEX_FILE", root / "index.json"),
+            ("PARSE_CACHE_FILE", root / "parse-cache.json"),
+            ("PROJECTS_FILE", root / "projects.json"),
+            ("MANUAL_FILE", root / "manual.json"),
+            ("DEMO_MODE", False),
+            ("INDEX_CACHE", {"key": None, "payload": None}),
+        ):
+            patcher = patch.object(app, attribute, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        config = {
+            "max_prompt_chars": 9000,
+            "sources": {
+                "codex": str(self.sessions),
+                "claude": str(root / "absent"),
+                "kimi": str(root / "absent"),
+                "kimi-desktop": str(root / "absent"),
+            },
+        }
+        patcher = patch.object(app, "load_config", return_value=config)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write_session(self, name: str, session_id: str, cwd: str) -> None:
+        (self.sessions / name).write_text(
+            "\n".join(
+                json.dumps(row)
+                for row in (
+                    {
+                        "type": "session_meta",
+                        "timestamp": "2026-07-20T09:00:00Z",
+                        "payload": {"id": session_id, "cwd": cwd},
+                    },
+                    {"type": "response_item", "payload": {"role": "user", "content": "a request"}},
+                )
+            ),
+            encoding="utf-8",
+        )
+
+    def records_by_id(self) -> dict[str, dict]:
+        return {record["id"]: record for record in app.build_index()["records"]}
+
+    def test_an_assignment_survives_a_rebuild_and_the_parse_cache(self) -> None:
+        home = str(Path.home())
+        self.write_session("one.jsonl", "codex-assign-001", home)
+        self.assertEqual(self.records_by_id()["codex:codex-assign-001"]["project"], "")
+        app.save_project_overrides(
+            {"by_workspace": {}, "by_record": {"codex:codex-assign-001": "Atlas Launch"}}
+        )
+        rebuilt = app.build_index()
+        self.assertEqual(rebuilt["records"][0]["project"], "Atlas Launch")
+        self.assertEqual(rebuilt["records"][0]["project_source"], "assigned")
+        # The cached record still carries the derived label, so clearing works.
+        self.assertEqual(rebuilt["records"][0]["derived_project"], "")
+        again = app.build_index()
+        self.assertEqual(again["reused_records"], 1)
+        self.assertEqual(again["records"][0]["project"], "Atlas Launch")
+
+    def test_clearing_an_assignment_restores_the_derived_label(self) -> None:
+        self.write_session("one.jsonl", "codex-assign-002", "/srv/projects/orchid")
+        app.save_project_overrides(
+            {"by_workspace": {}, "by_record": {"codex:codex-assign-002": "Renamed"}}
+        )
+        self.assertEqual(self.records_by_id()["codex:codex-assign-002"]["project"], "Renamed")
+        app.save_project_overrides({"by_workspace": {}, "by_record": {}})
+        self.assertEqual(self.records_by_id()["codex:codex-assign-002"]["project"], "orchid")
+
+    def test_a_workspace_assignment_covers_later_sessions_in_that_folder(self) -> None:
+        home = str(Path.home())
+        self.write_session("one.jsonl", "codex-assign-003", home)
+        app.save_project_overrides(
+            {"by_workspace": {app.workspace_key(home): "Home Notes"}, "by_record": {}}
+        )
+        self.assertEqual(self.records_by_id()["codex:codex-assign-003"]["project"], "Home Notes")
+        self.write_session("two.jsonl", "codex-assign-004", home)
+        records = self.records_by_id()
+        self.assertEqual(records["codex:codex-assign-004"]["project"], "Home Notes")
+
+    def test_a_record_assignment_outranks_its_workspace(self) -> None:
+        home = str(Path.home())
+        self.write_session("one.jsonl", "codex-assign-005", home)
+        app.save_project_overrides(
+            {
+                "by_workspace": {app.workspace_key(home): "Home Notes"},
+                "by_record": {"codex:codex-assign-005": "Atlas Launch"},
+            }
+        )
+        self.assertEqual(self.records_by_id()["codex:codex-assign-005"]["project"], "Atlas Launch")
+
+    def test_a_workspace_key_ignores_a_trailing_separator(self) -> None:
+        self.assertEqual(app.workspace_key("/srv/work/atlas/"), app.workspace_key("/srv/work/atlas"))
+
+
 class ManualTraceEndpointTest(unittest.TestCase):
     """A trace added by hand must also be editable and removable."""
 
@@ -764,6 +886,7 @@ class ManualTraceEndpointTest(unittest.TestCase):
             ("INDEX_FILE", root / "index.json"),
             ("PARSE_CACHE_FILE", root / "parse-cache.json"),
             ("MANUAL_FILE", root / "manual.json"),
+            ("PROJECTS_FILE", root / "projects.json"),
             ("DEMO_MODE", False),
         ):
             patcher = patch.object(app, attribute, value)
@@ -840,6 +963,46 @@ class ManualTraceEndpointTest(unittest.TestCase):
     def test_a_trace_still_needs_a_title(self) -> None:
         status, _ = self.post("/api/manual", {"source": "ChatGPT", "title": "  "})
         self.assertEqual(status, 400)
+
+    def test_a_session_can_be_assigned_to_a_project_over_http(self) -> None:
+        created, _ = self.post("/api/manual", {"source": "ChatGPT", "title": "Pricing thread"})
+        self.assertEqual(created, 201)
+        record_id = [
+            record["id"]
+            for record in app.load_index_payload()["records"]
+            if record.get("manual")
+        ][0]
+
+        assigned, body = self.post(
+            "/api/project/assign", {"record_id": record_id, "project": "Atlas Launch"}
+        )
+        self.assertEqual(assigned, 200)
+        self.assertEqual(body["project"], "Atlas Launch")
+        self.assertEqual(
+            app.load_project_overrides()["by_record"][record_id], "Atlas Launch"
+        )
+
+        renamed, rename_body = self.post(
+            "/api/project/rename", {"from": "Atlas Launch", "to": "Orchid Launch"}
+        )
+        self.assertEqual(renamed, 200)
+        self.assertEqual(rename_body["records"], 1)
+
+        cleared, _ = self.post("/api/project/assign", {"record_id": record_id, "project": ""})
+        self.assertEqual(cleared, 200)
+        self.assertNotIn(record_id, app.load_project_overrides()["by_record"])
+
+    def test_assigning_an_unknown_record_is_refused(self) -> None:
+        status, body = self.post(
+            "/api/project/assign", {"record_id": "codex:missing", "project": "Atlas"}
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error_code"], "record_missing")
+
+    def test_renaming_a_project_that_does_not_exist_is_refused(self) -> None:
+        status, body = self.post("/api/project/rename", {"from": "Nowhere", "to": "Somewhere"})
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error_code"], "project_missing")
 
     def test_removing_an_unknown_trace_leaves_the_file_alone(self) -> None:
         self.post("/api/manual", {"source": "ChatGPT", "title": "Keep me"})

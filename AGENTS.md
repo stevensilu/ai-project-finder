@@ -25,8 +25,8 @@ synthetic or privacy-safe visual verification.
 - `demo/`: synthetic fixtures and the demo recording script.
 - `tests/`: cross-platform parser, privacy, Demo Mode, and HTTP tests.
 - `scripts/build_release.py`: deterministic English/Chinese macOS/Windows packaging.
-- `outputs/`, `backups/`, generated indexes, the parse cache, logs, and manual traces
-  are local and ignored.
+- `outputs/`, `backups/`, generated indexes, the parse cache, project assignments,
+  logs, and manual traces are local and ignored.
 - `/api/` requires the per-launch session token, a loopback `Host`, and a same-origin
   POST. Changing the handler means re-checking `LocalApiBoundaryTest`.
 
