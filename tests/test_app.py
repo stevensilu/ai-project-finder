@@ -1279,10 +1279,10 @@ class ExcerptWindowTest(unittest.TestCase):
     INTERFACE_PIECES = (
         r"const normalize = [^\n]*",
         r"const alignedFold = \(value = \"\"\) => \{.*?\n    \};",
-        r"const alignedFoldFor = \(record, raw\) => \{.*?\n    \};",
+        r"function rawOffsetOfFolded\(chunk, foldedOffset\) \{.*?\n    \}",
+        r"const SCAN_WINDOW = \d+;\n    function findEarliestOffset\(raw, alignedTerms, normalizedTerms\) \{.*?\n    \}",
         r"function parseQuery\(raw\) \{.*?\n    \}",
         r"function queryTokens\(query\) \{.*?\n    \}",
-        r"function alignedQueryTokens\(query\) \{.*?\n    \}",
         r"const EXCERPT_HEAD.*?function matchedExcerpt\(record, query\) \{.*?\n    \}",
         r"function highlight\(value, query\).*?\n    \}",
     )
@@ -1308,7 +1308,7 @@ class ExcerptWindowTest(unittest.TestCase):
             script = Path(temporary) / "check.mjs"
             script.write_text(f"{self.interface_functions()}\n{body}", encoding="utf-8")
             completed = subprocess.run(
-                [node, str(script)], capture_output=True, text=True, timeout=30
+                [node, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=30
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout)
@@ -1345,37 +1345,60 @@ console.log(JSON.stringify(Object.fromEntries(
         # characters with nothing marked -- worst in Chinese, where …… is ordinary
         # punctuation.
         results = self.run_node("""
-const queries = ["\u2026\u2026\u4fee\u590d", "\u2103", "\u2162", "\ufb01le", "atlas", "\u5171\u4eab", "\uff21\uff22\uff23"];
+// The pair is [text as the record spells it, term as the reader types it]. They
+// differ where NFKC expands, which is where the two folds used to disagree.
+const pairs = [
+  ["\u2026\u2026\u4fee\u590d", "\u2026\u2026\u4fee\u590d"],
+  ["\u2103", "\u2103"],
+  ["\u2162", "\u2162"],
+  ["\ufb01le", "\ufb01le"],
+  ["the \ufb01le here", "file"],
+  ["report\u2026done", "report...done"],
+  ["area 5\u33a1", "5m2"],
+  ["atlas", "atlas"],
+  ["\u5171\u4eab", "\u5171\u4eab"],
+  ["\uff21\uff22\uff23", "abc"],
+];
 const out = {};
-for (const query of queries) {
-  const record = {excerpt: "lead text ".repeat(120) + query + " trailing text ".repeat(200)};
+for (const [text, query] of pairs) {
+  const record = {excerpt: "lead text ".repeat(120) + text + " trailing text ".repeat(200)};
   const shown = matchedExcerpt(record, query);
-  out[query] = {
+  out[text + " <- " + query] = {
     bounded: shown.length <= 1000,
-    inWindow: shown.includes(query),
+    inWindow: shown.includes(text),
     highlighted: highlight(shown, query).includes("<mark>"),
   };
 }
 console.log(JSON.stringify(out));
 """)
-        for query, outcome in results.items():
-            self.assertTrue(outcome["bounded"], query)
-            self.assertTrue(outcome["inWindow"], query)
-            self.assertTrue(outcome["highlighted"], query)
+        self.assertGreaterEqual(len(results), 10)
+        for label, outcome in results.items():
+            self.assertTrue(outcome["bounded"], label)
+            self.assertTrue(outcome["inWindow"], label)
+            self.assertTrue(outcome["highlighted"], label)
 
-    def test_the_aligned_fold_is_reused_per_record(self) -> None:
-        # Folding a whole request history per card per keystroke was the slowest
-        # thing on the page, so the result has to be kept.
-        source = self.interface_source()
-        self.assertIn("alignedFoldFor(record, raw)", source)
-        self.assertIn("record._aligned", source)
-        # The bulk path must come first; the per-character loop is the exception.
-        fold = re.search(r"const alignedFold = \(value = \"\"\) => \{(.*?)\n    \};", source, re.S)
-        assert fold is not None
-        self.assertLess(
-            fold.group(1).index("normalize(raw)"),
-            fold.group(1).index("for (const character"),
-        )
+    def test_locating_a_match_does_not_scale_with_the_record(self) -> None:
+        # A record holds a whole request history now. Folding all of it to find one
+        # offset made typing crawl, and one … anywhere put the entire string on the
+        # slow per-character path. Cost is asserted, not the shape of the code.
+        results = self.run_node("""
+const near = "\\u2026 lead ".repeat(40) + "needle" + " tail text".repeat(200);
+const far = "\\u2026 lead ".repeat(40) + " filler".repeat(120000) + "needle";
+const time = (fn) => { const t = process.hrtime.bigint(); fn(); return Number(process.hrtime.bigint() - t) / 1e6; };
+console.log(JSON.stringify({
+  smallMs: time(() => matchedExcerpt({excerpt: near}, "needle")),
+  // Same term, but a megabyte of expanding-character text before it.
+  largeMs: time(() => matchedExcerpt({excerpt: far}, "needle")),
+  largeChars: far.length,
+  bothFound: matchedExcerpt({excerpt: near}, "needle").includes("needle")
+    && matchedExcerpt({excerpt: far}, "needle").includes("needle"),
+}));
+""")
+        self.assertTrue(results["bothFound"])
+        self.assertGreater(results["largeChars"], 500_000)
+        # Generous enough for a loaded CI runner, far under the seconds a full
+        # per-character fold of this string took.
+        self.assertLess(results["largeMs"], 400, results)
 
     def test_the_body_ranking_signal_stays_under_the_metadata_weights(self) -> None:
         node = shutil.which("node")
@@ -1404,7 +1427,7 @@ console.log(JSON.stringify({
             script = Path(temporary) / "score.mjs"
             script.write_text(harness, encoding="utf-8")
             completed = subprocess.run(
-                [node, str(script)], capture_output=True, text=True, timeout=30
+                [node, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=30
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)

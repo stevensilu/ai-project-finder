@@ -1444,7 +1444,7 @@ def build_index_now() -> dict[str, Any]:
                         if clipped:
                             notices.append(
                                 f"{source}: {path.name}: {clipped} turn(s) truncated "
-                                f"at {MAX_TURN_CHARS} characters"
+                                f"at {max_chars} characters"
                             )
                 except Exception as exc:  # one damaged session must not block the index
                     errors.append(f"{source}: {path.name}: {type(exc).__name__}")
