@@ -209,6 +209,13 @@ A refresh re-reads only the transcripts whose size or timestamp changed since th
 
 The refresh that runs at launch happens in the background. An open dashboard notices when it finishes and reloads the list on its own.
 
+### What becomes searchable
+
+Every request typed in a session is indexed, including the most recent one in a
+long conversation. A single request longer than 50,000 characters, such as a large
+pasted file, is shortened to that length, and the refresh reports which sessions
+that affected. Replies from the AI are not indexed.
+
 ### Custom source paths
 
 The default `config.json` uses automatic discovery:
@@ -305,7 +312,7 @@ Binding to `127.0.0.1` keeps other computers out. On its own it does not stop a 
 
 Restarting the application issues a new token, and an open dashboard tab reloads once to pick it up.
 
-The generated index may contain prompt excerpts, filenames, and workspace paths. The `data/` folder should be treated as private and reviewed before sharing an installed copy.
+The generated index contains the full text of every request, along with filenames and workspace paths, so it is larger than the sessions it describes are numerous. The `data/` folder should be treated as private and reviewed before sharing an installed copy.
 
 Manual traces may contain private links or project names. `data/manual.json` is intentionally excluded from version control.
 

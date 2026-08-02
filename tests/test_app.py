@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -402,6 +403,135 @@ class ClaudeTranscriptParserTest(unittest.TestCase):
         assert record is not None
         self.assertEqual(record["title"], "Desktop rename")
         self.assertEqual(record["title_source"], "desktop-user")
+
+
+class PromptRecallTest(unittest.TestCase):
+    """Every user turn stays searchable, however long the conversation runs.
+
+    A per-session budget kept only the oldest text, so the most recent request in
+    a long session -- usually the most useful clue -- was unfindable.
+    """
+
+    def write_claude(self, directory: Path, prompts: list[str]) -> Path:
+        rows: list[dict] = []
+        for position, text in enumerate(prompts):
+            rows.append(
+                {
+                    "type": "user",
+                    "sessionId": "sess-recall-001",
+                    "cwd": "/srv/projects/atlas",
+                    "timestamp": f"2026-07-20T10:{position:02d}:00Z",
+                    "message": {"content": text},
+                }
+            )
+        path = directory / "recall.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+            encoding="utf-8",
+        )
+        return path
+
+    def write_codex(self, directory: Path, prompts: list[str]) -> Path:
+        rows: list[dict] = [
+            {
+                "type": "session_meta",
+                "timestamp": "2026-07-20T09:00:00Z",
+                "payload": {"id": "codex-recall-001", "cwd": "/srv/projects/atlas"},
+            }
+        ]
+        for text in prompts:
+            rows.append(
+                {
+                    "type": "response_item",
+                    "timestamp": "2026-07-20T09:01:00Z",
+                    "payload": {"role": "user", "content": text},
+                }
+            )
+        path = directory / "recall-codex.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_a_late_turn_past_the_old_budget_stays_searchable(self) -> None:
+        # The final turn also exceeds the old 9000 default on its own, so
+        # reintroducing any per-turn cap of that size fails this test too.
+        filler = ["padding request " * 400 for _ in range(6)]
+        needle = "locate the " + ("wholesale forecast " * 600) + "orchid teardown"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_claude(Path(temporary), [*filler, needle])
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertIn("orchid teardown", record["excerpt"])
+        self.assertGreater(len(record["excerpt"]), 9000)
+
+    def test_codex_also_keeps_a_late_turn(self) -> None:
+        # Both parsers shared the budget pattern; changing one is not enough.
+        filler = ["padding request " * 400 for _ in range(6)]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_codex(Path(temporary), [*filler, "orchid teardown"])
+            record = app.parse_codex(path, 9000)
+        assert record is not None
+        self.assertIn("orchid teardown", record["excerpt"])
+
+    def test_message_count_reports_every_user_turn(self) -> None:
+        prompts = [f"request number {index} " + "filler " * 300 for index in range(12)]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_claude(Path(temporary), prompts)
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertEqual(record["message_count"], 12)
+
+    def test_one_enormous_turn_is_capped_and_reported(self) -> None:
+        oversized = "x" * (app.MAX_TURN_CHARS + 5000)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_claude(Path(temporary), ["a short request", oversized])
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertLessEqual(len(record["excerpt"]), app.MAX_TURN_CHARS + 200)
+        # A silent truncation is what this change exists to remove.
+        self.assertEqual(record["truncated_turns"], 1)
+
+    def test_a_capped_turn_reaches_the_index_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            self.write_codex(sessions, ["x" * (app.MAX_TURN_CHARS + 10)])
+            config = {
+                "max_prompt_chars": 9000,
+                "sources": {
+                    "codex": str(sessions),
+                    "claude": str(root / "absent"),
+                    "kimi": str(root / "absent"),
+                    "kimi-desktop": str(root / "absent"),
+                },
+            }
+            with (
+                patch.object(app, "DATA_DIR", root),
+                patch.object(app, "INDEX_FILE", root / "index.json"),
+                patch.object(app, "PARSE_CACHE_FILE", root / "parse-cache.json"),
+                patch.object(app, "PROJECTS_FILE", root / "projects.json"),
+                patch.object(app, "MANUAL_FILE", root / "manual.json"),
+                patch.object(app, "DEMO_MODE", False),
+                patch.object(app, "INDEX_CACHE", {"key": None, "payload": None}),
+                patch.object(app, "load_config", return_value=config),
+            ):
+                payload = app.build_index()
+        self.assertTrue(
+            any("truncated" in warning for warning in payload["warnings"]),
+            payload["warnings"],
+        )
+
+    def test_the_record_does_not_store_the_same_text_twice(self) -> None:
+        # excerpt already is the joined turns; a second copy would duplicate the
+        # corpus in the index, every API response, and the parse cache.
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_claude(Path(temporary), ["first request", "second request"])
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertNotIn("turns", record)
 
 
 class ProjectNamingTest(unittest.TestCase):
@@ -1054,6 +1184,97 @@ class ManualTraceEndpointTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(body["error_code"], "trace_missing")
         self.assertEqual(len(self.stored_traces()), 1)
+
+
+class ExcerptWindowTest(unittest.TestCase):
+    """The card shows two clamped lines, so no path may hand it the whole record.
+
+    Removing the 9000-character index cap removed the only bound on the two
+    matchedExcerpt paths that returned the excerpt untouched: an empty query, and
+    a query that matched only the title, project, or workspace.
+    """
+
+    def interface_source(self) -> str:
+        root = Path(__file__).resolve().parents[1]
+        return (root / "static" / "index.html").read_text(encoding="utf-8")
+
+    def test_every_excerpt_path_is_bounded(self) -> None:
+        source = self.interface_source()
+        window = re.search(
+            r"function matchedExcerpt\(record, query\) \{(.*?)\n    \}", source, re.S
+        )
+        self.assertIsNotNone(window, "matchedExcerpt not found")
+        assert window is not None
+        body = window.group(1)
+        # Every early exit routes through the head clamp rather than returning raw.
+        self.assertNotIn("return raw;", body)
+        self.assertEqual(body.count("excerptHead(raw)"), 3)
+        self.assertIn("normalized.length !== raw.length", body)
+
+    def test_the_head_clamp_is_declared_with_an_ellipsis(self) -> None:
+        source = self.interface_source()
+        self.assertIn("const EXCERPT_HEAD = 900;", source)
+        self.assertRegex(source, r"excerptHead\s*=\s*\(raw\)\s*=>")
+
+    def test_the_body_ranking_signal_is_capped(self) -> None:
+        source = self.interface_source()
+        self.assertIn("const BODY_SCORE_CAP", source)
+        # Uncapped frequency ranks the longest session first; the cap keeps this a
+        # tiebreaker under the metadata weights, which add 18.
+        cap = int(re.search(r"const BODY_SCORE_CAP = (\d+);", source).group(1))
+        self.assertLess(cap, 18)
+        self.assertIn("Math.min(BODY_SCORE_CAP", source)
+        self.assertIn("bodyTermScore(record, token)", source)
+
+
+class ResponseCompressionTest(DemoServerTestCase):
+    """The index carries every request now, so it travels compressed."""
+
+    def test_the_index_is_gzipped_for_a_client_that_accepts_it(self) -> None:
+        status, headers, body = self.raw_request(
+            "GET", "/api/index", headers={"Accept-Encoding": "gzip, deflate"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("content-encoding"), "gzip")
+        self.assertIn("accept-encoding", str(headers.get("vary", "")).lower())
+        payload = json.loads(gzip.decompress(body).decode("utf-8"))
+        self.assertTrue(payload["demo"])
+        self.assertEqual(len(payload["records"]), 20)
+
+    def test_the_same_index_is_plain_json_without_the_header(self) -> None:
+        status, headers, body = self.raw_request("GET", "/api/index")
+        self.assertEqual(status, 200)
+        self.assertNotIn("content-encoding", headers)
+        self.assertEqual(len(json.loads(body.decode("utf-8"))["records"]), 20)
+
+    def test_compression_does_not_change_what_the_reader_receives(self) -> None:
+        _, _, plain = self.raw_request("GET", "/api/index")
+        _, _, packed = self.raw_request(
+            "GET", "/api/index", headers={"Accept-Encoding": "gzip"}
+        )
+        # Demo timestamps are offsets from the moment of the call, so compare the
+        # fields that identify a record rather than the whole payload.
+        def identity(body: bytes) -> list[tuple[str, str, str]]:
+            return [
+                (record["id"], record["title"], record["excerpt"])
+                for record in json.loads(body.decode("utf-8"))["records"]
+            ]
+
+        self.assertEqual(identity(plain), identity(gzip.decompress(packed)))
+        self.assertLess(len(packed), len(plain))
+
+    def test_a_content_length_matches_the_compressed_body(self) -> None:
+        # A mismatch here hangs the browser rather than failing loudly.
+        _, headers, body = self.raw_request(
+            "GET", "/api/index", headers={"Accept-Encoding": "gzip"}
+        )
+        self.assertEqual(int(headers.get("content-length", "0")), len(body))
+
+    def test_an_identity_only_client_is_not_sent_gzip(self) -> None:
+        _, headers, _ = self.raw_request(
+            "GET", "/api/index", headers={"Accept-Encoding": "identity"}
+        )
+        self.assertNotIn("content-encoding", headers)
 
 
 class LocalApiBoundaryTest(DemoServerTestCase):

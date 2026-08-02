@@ -710,6 +710,23 @@
       return 0.9;
     }
 
+    // How often a term appears in the request text, damped and capped. Without
+    // this every conversation-text match scored the same flat base and the whole
+    // group tied at the bottom. The cap keeps it a tiebreaker: a long session
+    // that says a word often must not outrank a session named after it.
+    const BODY_SCORE_CAP = 6;
+    function bodyTermScore(record, token) {
+      const haystack = recordSearchText(record);
+      let count = 0;
+      let from = haystack.indexOf(token);
+      while (from >= 0 && count < 64) {
+        count += 1;
+        from = haystack.indexOf(token, from + token.length);
+      }
+      if (!count) return 0;
+      return Math.min(BODY_SCORE_CAP, 1 + Math.log(count));
+    }
+
     function scoreRecord(record, tokens) {
       if (!tokens.length) return 0;
       const title = normalize(record.title);
@@ -723,18 +740,27 @@
         const titleAt = title.indexOf(token);
         if (titleAt >= 0) value += titleAt < 20 ? 18 : 12;
         if (cwd.includes(token)) value += 8;
-        return score + value;
+        return score + value + bodyTermScore(record, token);
       }, 0);
       return base * recencyWeight(record.updated_at);
     }
 
+    // A record now holds the whole request history, so every path out of here
+    // has to be bounded. The card shows two clamped lines; handing the browser a
+    // 250 KB string to hide costs layout and buys nothing.
+    const EXCERPT_HEAD = 900;
+    const excerptHead = (raw) => raw.length > EXCERPT_HEAD ? `${raw.slice(0, EXCERPT_HEAD)}…` : raw;
     function matchedExcerpt(record, query) {
       const raw = String(record.excerpt || "");
       const tokens = queryTokens(query);
-      if (!raw || !tokens.length) return raw;
+      if (!raw || !tokens.length) return excerptHead(raw);
       const normalized = normalize(raw);
+      // Offsets below are measured on the folded copy but slice the original, so
+      // a fold that changes length would shift the window. highlight() guards the
+      // same way.
+      if (normalized.length !== raw.length) return excerptHead(raw);
       const positions = tokens.map((token) => normalized.indexOf(token)).filter((position) => position >= 0);
-      if (!positions.length) return raw;
+      if (!positions.length) return excerptHead(raw);
       const start = Math.max(0, Math.min(...positions) - 120);
       const end = Math.min(raw.length, start + 820);
       return `${start > 0 ? "…" : ""}${raw.slice(start, end)}${end < raw.length ? "…" : ""}`;
