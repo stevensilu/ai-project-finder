@@ -1420,6 +1420,22 @@ class ResponseCompressionTest(DemoServerTestCase):
         )
         self.assertNotIn("content-encoding", headers)
 
+    def test_a_quality_of_zero_is_read_as_a_refusal(self) -> None:
+        # q=0 means the client refuses the encoding. Asserted over the wire
+        # rather than against the helper, because that is where it went wrong.
+        for header in ("gzip;q=0", "identity;q=1, gzip;q=0", "gzip; q=0"):
+            _, headers, _ = self.raw_request(
+                "GET", "/api/index", headers={"Accept-Encoding": header}
+            )
+            self.assertNotIn("content-encoding", headers, header)
+
+    def test_a_weighted_acceptance_still_compresses(self) -> None:
+        for header in ("gzip;q=0.5", "br;q=1.0, gzip;q=0.8", "x-gzip"):
+            _, headers, _ = self.raw_request(
+                "GET", "/api/index", headers={"Accept-Encoding": header}
+            )
+            self.assertEqual(headers.get("content-encoding"), "gzip", header)
+
 
 class LocalApiBoundaryTest(DemoServerTestCase):
     """A website must not be able to read the index or trigger an open action."""

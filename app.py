@@ -1644,8 +1644,23 @@ class FinderHandler(SimpleHTTPRequestHandler):
         return True
 
     def client_accepts_gzip(self) -> bool:
-        encodings = str(self.headers.get("Accept-Encoding") or "").lower()
-        return any(token.strip().split(";")[0] == "gzip" for token in encodings.split(","))
+        """Honour the quality values, so q=0 reads as a refusal rather than a yes."""
+        for token in str(self.headers.get("Accept-Encoding") or "").lower().split(","):
+            name, _, parameters = token.strip().partition(";")
+            if name.strip() not in {"gzip", "x-gzip"}:
+                continue
+            quality = ""
+            for parameter in parameters.split(";"):
+                key, _, value = parameter.partition("=")
+                if key.strip() == "q":
+                    quality = value.strip()
+            if not quality:
+                return True
+            try:
+                return float(quality) > 0
+            except ValueError:
+                return True
+        return False
 
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
