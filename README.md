@@ -223,7 +223,7 @@ The default `config.json` uses automatic discovery:
 ```json
 {
   "port": 4388,
-  "max_prompt_chars": 9000,
+  "max_prompt_chars": 50000,
   "locale": "en",
   "sources": {
     "codex": "auto",

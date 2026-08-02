@@ -47,9 +47,16 @@ DEMO_MODE = False
 IS_WINDOWS = os.name == "nt"
 APP_LOCALE = "en"
 
+# The default for max_prompt_chars: how long one request may be before it is
+# shortened. It sits well above the longest request seen in real histories, so it
+# never fires on ordinary work and only bounds a pathological paste. The old 9000
+# default was spent across a whole session rather than per request, which is what
+# put the later turns of a long conversation out of reach.
+MAX_TURN_CHARS = 50_000
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "port": 4388,
-    "max_prompt_chars": 9000,
+    "max_prompt_chars": MAX_TURN_CHARS,
     "locale": "en",
     "sources": {
         "codex": "auto",
@@ -74,8 +81,10 @@ INTERNAL_STORAGE_PATH_RE = re.compile(
     rf"{HOME_PATTERN}/Library/Application Support/[^\s\n\r\"'<>]+",
     re.IGNORECASE,
 )
+# Any location, not only Application Support: skills also ship from plugin
+# caches under the home directory, and those payloads were reaching the index.
 INJECTED_SKILL_PAYLOAD_RE = re.compile(
-    rf"\s*Base directory for this skill:\s*{HOME_PATTERN}/Library/Application Support/[\s\S]*$",
+    rf"\s*Base directory for this skill:\s*{HOME_PATTERN}{PATH_SEPARATOR_PATTERN}[\s\S]*$",
     re.IGNORECASE,
 )
 SPACE_RE = re.compile(r"\s+")
@@ -145,13 +154,6 @@ PARSE_CACHE_FILE = DATA_DIR / "parse-cache.json"
 PROJECTS_FILE = DATA_DIR / "projects.json"
 # Bump when a parser changes what it extracts, so stale entries are discarded.
 PARSE_CACHE_VERSION = 3
-
-# One turn cannot outgrow this. It sits well above the longest request seen in
-# real histories, so it never fires on ordinary work and only bounds a
-# pathological paste. max_prompt_chars is deliberately not reused here: at its
-# 9000 default it would still drop the tail of a long request, which is the
-# recall problem this ceiling exists alongside, not a second copy of it.
-MAX_TURN_CHARS = 50_000
 
 
 def environment_home(name: str, default: Path) -> Path:
@@ -1031,6 +1033,18 @@ def find_artifacts(text: str) -> list[str]:
     return found
 
 
+def clip_prompts(prompts: list[str], max_prompt_chars: int) -> tuple[list[str], int]:
+    """Shorten any single request past the ceiling, and say how many were cut."""
+    clipped: list[str] = []
+    truncated = 0
+    for text in prompts:
+        if len(text) > max_prompt_chars:
+            text = text[:max_prompt_chars]
+            truncated += 1
+        clipped.append(text)
+    return clipped, truncated
+
+
 def make_record(
     *,
     source: str,
@@ -1092,7 +1106,6 @@ def is_user_initiated_codex_session(meta: dict[str, Any]) -> bool:
 def parse_codex(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
     meta: dict[str, Any] = {}
     prompts: list[str] = []
-    total_chars = 0
     truncated_turns = 0
     created = ""
     updated = ""
@@ -1111,11 +1124,10 @@ def parse_codex(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
             if isinstance(payload, dict) and payload.get("role") == "user":
                 text = text_from_content(payload.get("content"))
                 if text:
-                    if len(text) > MAX_TURN_CHARS:
-                        text = text[:MAX_TURN_CHARS]
+                    if len(text) > max_prompt_chars:
+                        text = text[:max_prompt_chars]
                         truncated_turns += 1
                     prompts.append(text)
-                    total_chars += len(text)
                     message_count += 1
     if not meta and not prompts:
         return None
@@ -1147,7 +1159,6 @@ def parse_claude(
     desktop_sessions: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any] | None:
     prompts: list[str] = []
-    total_chars = 0
     truncated_turns = 0
     created = ""
     updated = ""
@@ -1173,11 +1184,10 @@ def parse_claude(
             message = row.get("message", {})
             text = text_from_content(message.get("content") if isinstance(message, dict) else message)
             if text:
-                if len(text) > MAX_TURN_CHARS:
-                    text = text[:MAX_TURN_CHARS]
+                if len(text) > max_prompt_chars:
+                    text = text[:max_prompt_chars]
                     truncated_turns += 1
                 prompts.append(text)
-                total_chars += len(text)
                 message_count += 1
         if row.get("type") == "custom-title":
             candidate_title = str(row.get("customTitle") or "").strip()
@@ -1241,11 +1251,11 @@ def parse_kimi(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
     prompts = [title]
     if last_prompt and last_prompt != title:
         prompts.append(last_prompt)
-    prompts = [item[:max_prompt_chars] for item in prompts]
+    prompts, truncated_turns = clip_prompts(prompts, max_prompt_chars)
     cwd = str(state.get("cwd") or state.get("workDir") or "")
     session_id = str(state.get("id") or path.parent.name)
     stat = path.stat()
-    return make_record(
+    record = make_record(
         source="kimi",
         session_id=session_id,
         session_path=str(path),
@@ -1257,6 +1267,8 @@ def parse_kimi(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
         message_count=max(1, len(prompts)),
         origin="Kimi Code",
     )
+    record["truncated_turns"] = truncated_turns
+    return record
 
 
 def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
@@ -1274,7 +1286,7 @@ def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | No
     prompts = [title]
     if last_prompt and last_prompt != title:
         prompts.append(last_prompt)
-    prompts = [item[:max_prompt_chars] for item in prompts]
+    prompts, truncated_turns = clip_prompts(prompts, max_prompt_chars)
     cwd = str(state.get("cwd") or state.get("workDir") or "")
     session_id = str(state.get("id") or session_folder)
     stat = path.stat()
@@ -1290,6 +1302,7 @@ def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | No
         message_count=max(1, len(prompts)),
         origin="Kimi Desktop / Work",
     )
+    record["truncated_turns"] = truncated_turns
     record["open_label"] = "Open Kimi Desktop ↗"
     return record
 
@@ -1370,7 +1383,7 @@ def build_index_now() -> dict[str, Any]:
     config = load_config()
     global NAMING_RULES
     NAMING_RULES = resolve_naming_rules(config)
-    max_chars = int(config.get("max_prompt_chars", 9000))
+    max_chars = int(config.get("max_prompt_chars", MAX_TURN_CHARS))
     source_paths = resolved_source_paths(config)
     claude_desktop_sessions = load_claude_desktop_session_map(all_profiles=True)
     records: list[dict[str, Any]] = []

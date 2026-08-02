@@ -592,6 +592,20 @@
     const $ = (selector) => document.querySelector(selector);
     const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
     const normalize = (value = "") => String(value).toLowerCase().normalize("NFKC");
+    // Folding for work that measures an offset and then slices the original. NFKC
+    // changes length on characters that are ordinary in real text -- … becomes
+    // three dots, and …… is standard Chinese punctuation -- which shifted every
+    // offset and used to make the caller give up and show the opening text
+    // instead of the match. Characters that would expand are left as they are, so
+    // positions stay aligned while case and fullwidth folding still apply.
+    const alignedFold = (value = "") => {
+      let folded = "";
+      for (const character of String(value)) {
+        const candidate = character.toLowerCase().normalize("NFKC");
+        folded += candidate.length === character.length ? candidate : character;
+      }
+      return folded;
+    };
     const sourceClass = (source) => source === "kimi-desktop" ? "kimi" : (["codex", "claude", "kimi"].includes(source) ? source : "other");
 
     function updateThemeLabel() { $("#themeBtn").textContent = root.getAttribute("data-theme") === "dark" ? copy.lightsOn : copy.lightsOff; }
@@ -641,10 +655,11 @@
       const raw = String(value ?? "");
       const terms = queryTokens(query);
       if (!raw || !terms.length) return escapeHtml(raw);
-      const folded = normalize(raw);
-      // Folding can change length on rare inputs. Offsets would then be wrong,
-      // so the text is returned unhighlighted rather than mangled.
-      if (folded.length !== raw.length) return escapeHtml(raw);
+      // Aligned folding keeps these offsets valid on text that NFKC would
+      // lengthen. The guard this replaces returned the text unhighlighted, and
+      // because a windowed excerpt always begins with …, it was reached for every
+      // excerpt on the page.
+      const folded = alignedFold(raw);
       const ranges = [];
       terms.forEach((term) => {
         let from = 0;
@@ -714,17 +729,19 @@
     // this every conversation-text match scored the same flat base and the whole
     // group tied at the bottom. The cap keeps it a tiebreaker: a long session
     // that says a word often must not outrank a session named after it.
-    const BODY_SCORE_CAP = 6;
+    // Counting stops here, which is also what bounds the score: 1 + log(64) is
+    // about 5.2, comfortably under the 18 a project or title match adds.
+    const BODY_TERM_LIMIT = 64;
     function bodyTermScore(record, token) {
+      if (!token) return 0;
       const haystack = recordSearchText(record);
       let count = 0;
       let from = haystack.indexOf(token);
-      while (from >= 0 && count < 64) {
+      while (from >= 0 && count < BODY_TERM_LIMIT) {
         count += 1;
         from = haystack.indexOf(token, from + token.length);
       }
-      if (!count) return 0;
-      return Math.min(BODY_SCORE_CAP, 1 + Math.log(count));
+      return count ? 1 + Math.log(count) : 0;
     }
 
     function scoreRecord(record, tokens) {
@@ -754,12 +771,10 @@
       const raw = String(record.excerpt || "");
       const tokens = queryTokens(query);
       if (!raw || !tokens.length) return excerptHead(raw);
-      const normalized = normalize(raw);
-      // Offsets below are measured on the folded copy but slice the original, so
-      // a fold that changes length would shift the window. highlight() guards the
-      // same way.
-      if (normalized.length !== raw.length) return excerptHead(raw);
-      const positions = tokens.map((token) => normalized.indexOf(token)).filter((position) => position >= 0);
+      const normalized = alignedFold(raw);
+      const positions = tokens
+        .map((token) => normalized.indexOf(token))
+        .filter((position) => position >= 0);
       if (!positions.length) return excerptHead(raw);
       const start = Math.max(0, Math.min(...positions) - 120);
       const end = Math.min(raw.length, start + 820);

@@ -4,6 +4,8 @@ import gzip
 import json
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -28,6 +30,62 @@ class AutomaticPathsTest(unittest.TestCase):
             },
         )
         self.assertEqual(app.DEFAULT_CONFIG["locale"], "en")
+        # The documented knob is the per-request ceiling, so it must have effect.
+        self.assertEqual(app.DEFAULT_CONFIG["max_prompt_chars"], app.MAX_TURN_CHARS)
+
+    def test_every_parser_reports_a_request_it_shortened(self) -> None:
+        # All four adapters honour the same ceiling and account for a clipped
+        # request, so the README promise holds for every source.
+        oversized = "pasted content " * 900
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            claude = root / "c.jsonl"
+            claude.write_text(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "sessionId": "sess-cap-001",
+                        "cwd": str(root),
+                        "timestamp": "2026-07-20T10:00:00Z",
+                        "message": {"content": oversized},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            codex = root / "x.jsonl"
+            codex.write_text(
+                "\n".join(
+                    json.dumps(row)
+                    for row in (
+                        {
+                            "type": "session_meta",
+                            "payload": {"id": "codex-cap-001", "cwd": str(root)},
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {"role": "user", "content": oversized},
+                        },
+                    )
+                ),
+                encoding="utf-8",
+            )
+            kimi_dir = root / "conv-cap-001"
+            kimi_dir.mkdir()
+            kimi = kimi_dir / "state.json"
+            kimi.write_text(
+                json.dumps({"id": "conv-cap-001", "title": "cap", "lastPrompt": oversized}),
+                encoding="utf-8",
+            )
+            parsed = {
+                "claude": app.parse_claude(claude, 9000),
+                "codex": app.parse_codex(codex, 9000),
+                "kimi": app.parse_kimi(kimi, 9000),
+                "kimi-desktop": app.parse_kimi_desktop(kimi, 9000),
+            }
+        for source, record in parsed.items():
+            assert record is not None, source
+            self.assertLessEqual(len(record["excerpt"]), 9000 + 100, source)
+            self.assertEqual(record["truncated_turns"], 1, source)
 
     def test_locale_normalization_is_deterministic(self) -> None:
         self.assertEqual(app.normalize_locale("en"), "en")
@@ -455,16 +513,18 @@ class PromptRecallTest(unittest.TestCase):
         return path
 
     def test_a_late_turn_past_the_old_budget_stays_searchable(self) -> None:
-        # The final turn also exceeds the old 9000 default on its own, so
-        # reintroducing any per-turn cap of that size fails this test too.
+        # The session total far exceeds the old 9000 budget, which used to drop
+        # every turn after it was spent. Each individual turn stays under the
+        # per-turn ceiling, so nothing here is legitimately truncated.
         filler = ["padding request " * 400 for _ in range(6)]
-        needle = "locate the " + ("wholesale forecast " * 600) + "orchid teardown"
+        needle = "locate the orchid teardown"
         with tempfile.TemporaryDirectory() as temporary:
             path = self.write_claude(Path(temporary), [*filler, needle])
             record = app.parse_claude(path, 9000)
         assert record is not None
         self.assertIn("orchid teardown", record["excerpt"])
         self.assertGreater(len(record["excerpt"]), 9000)
+        self.assertEqual(record["truncated_turns"], 0)
 
     def test_codex_also_keeps_a_late_turn(self) -> None:
         # Both parsers shared the budget pattern; changing one is not enough.
@@ -523,6 +583,24 @@ class PromptRecallTest(unittest.TestCase):
             any("truncated" in warning for warning in payload["warnings"]),
             payload["warnings"],
         )
+
+    def test_an_injected_skill_payload_is_stripped_from_any_directory(self) -> None:
+        # The strip used to anchor on ~/Library/Application Support, so a skill
+        # shipped from a plugin cache reached the index intact. Full-text indexing
+        # made that far more visible.
+        for base in (
+            Path.home() / "Library" / "Application Support" / "pack" / "skills" / "demo",
+            Path.home() / ".claude" / "plugins" / "cache" / "pack" / "skills" / "demo",
+        ):
+            prompt = (
+                "find the launch checklist\n\n"
+                f"Base directory for this skill: {base}\n"
+                "---\nname: demo\n---\nInternal skill instructions follow."
+            )
+            cleaned = app.clean_user_text(prompt)
+            self.assertIn("launch checklist", cleaned)
+            self.assertNotIn("Base directory for this skill", cleaned, str(base))
+            self.assertNotIn("Internal skill instructions", cleaned, str(base))
 
     def test_the_record_does_not_store_the_same_text_twice(self) -> None:
         # excerpt already is the joined turns; a second copy would duplicate the
@@ -1198,33 +1276,99 @@ class ExcerptWindowTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         return (root / "static" / "index.html").read_text(encoding="utf-8")
 
-    def test_every_excerpt_path_is_bounded(self) -> None:
+    def test_no_path_out_of_matchedexcerpt_returns_the_whole_record(self) -> None:
+        # Asserting on source text passed while the behaviour was broken, so this
+        # runs the real function instead. Node is not a build dependency, so the
+        # check is skipped where it is unavailable rather than failing the suite.
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable")
         source = self.interface_source()
         window = re.search(
-            r"function matchedExcerpt\(record, query\) \{(.*?)\n    \}", source, re.S
+            r"(const alignedFold = \(value = \"\"\) => \{.*?\n    \};)", source, re.S
+        )
+        self.assertIsNotNone(window, "alignedFold not found")
+        assert window is not None
+        fold = window.group(1)
+        window = re.search(
+            r"(const EXCERPT_HEAD.*?\n    function matchedExcerpt\(record, query\) \{.*?\n    \})",
+            source,
+            re.S,
         )
         self.assertIsNotNone(window, "matchedExcerpt not found")
         assert window is not None
-        body = window.group(1)
-        # Every early exit routes through the head clamp rather than returning raw.
-        self.assertNotIn("return raw;", body)
-        self.assertEqual(body.count("excerptHead(raw)"), 3)
-        self.assertIn("normalized.length !== raw.length", body)
+        harness = """
+const normalize = (value = "") => String(value).toLowerCase().normalize("NFKC");
+const queryTokens = (query) => String(query || "").split(/\\s+/).filter(Boolean).map(normalize);
+%s
+%s
+const long = "x".repeat(600000);
+const cjk = "阿特拉斯…" + "发布计划".repeat(60000);
+const cases = {
+  emptyQuery: matchedExcerpt({excerpt: long}, ""),
+  titleOnlyMatch: matchedExcerpt({excerpt: long}, "nowhere-in-the-body"),
+  bodyMatch: matchedExcerpt({excerpt: "a".repeat(5000) + "needle" + "b".repeat(500000)}, "needle"),
+  foldDriftMatch: matchedExcerpt({excerpt: cjk}, "发布计划"),
+  missing: matchedExcerpt({}, "anything"),
+};
+console.log(JSON.stringify(Object.fromEntries(
+  Object.entries(cases).map(([name, value]) => [name, {
+    length: value.length,
+    keepsMatch: value.includes("needle") || value.includes("发布计划"),
+  }])
+)));
+""" % (fold, window.group(1))
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "check.mjs"
+            script.write_text(harness, encoding="utf-8")
+            completed = subprocess.run(
+                [node, str(script)], capture_output=True, text=True, timeout=30
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        results = json.loads(completed.stdout)
+        for name, outcome in results.items():
+            self.assertLessEqual(outcome["length"], 1000, f"{name} returned {outcome['length']}")
+        # A record whose text folds to a different length still shows the match,
+        # rather than falling back to the opening characters.
+        self.assertTrue(results["foldDriftMatch"]["keepsMatch"])
+        self.assertTrue(results["bodyMatch"]["keepsMatch"])
 
-    def test_the_head_clamp_is_declared_with_an_ellipsis(self) -> None:
+    def test_the_body_ranking_signal_stays_under_the_metadata_weights(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable")
         source = self.interface_source()
-        self.assertIn("const EXCERPT_HEAD = 900;", source)
-        self.assertRegex(source, r"excerptHead\s*=\s*\(raw\)\s*=>")
-
-    def test_the_body_ranking_signal_is_capped(self) -> None:
-        source = self.interface_source()
-        self.assertIn("const BODY_SCORE_CAP", source)
-        # Uncapped frequency ranks the longest session first; the cap keeps this a
-        # tiebreaker under the metadata weights, which add 18.
-        cap = int(re.search(r"const BODY_SCORE_CAP = (\d+);", source).group(1))
-        self.assertLess(cap, 18)
-        self.assertIn("Math.min(BODY_SCORE_CAP", source)
-        self.assertIn("bodyTermScore(record, token)", source)
+        block = re.search(
+            r"(const BODY_TERM_LIMIT.*?\n    function bodyTermScore\(record, token\) \{.*?\n    \})",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(block, "bodyTermScore not found")
+        assert block is not None
+        harness = """
+const normalize = (value = "") => String(value).toLowerCase().normalize("NFKC");
+const recordSearchText = (record) => record._search;
+%s
+const score = (n) => bodyTermScore({_search: "needle ".repeat(n)}, "needle");
+console.log(JSON.stringify({
+  one: score(1), ten: score(10), many: score(5000),
+  monotonic: score(1) < score(10) && score(10) < score(100),
+  absent: score(0),
+}));
+""" % block.group(1)
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "score.mjs"
+            script.write_text(harness, encoding="utf-8")
+            completed = subprocess.run(
+                [node, str(script)], capture_output=True, text=True, timeout=30
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["absent"], 0)
+        self.assertTrue(result["monotonic"])
+        # A project or title hit adds 18. Frequency has to stay a tiebreaker under
+        # that, however often a long session repeats the word.
+        self.assertLess(result["many"], 18)
 
 
 class ResponseCompressionTest(DemoServerTestCase):
