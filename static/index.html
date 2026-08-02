@@ -598,13 +598,28 @@
     // offset and used to make the caller give up and show the opening text
     // instead of the match. Characters that would expand are left as they are, so
     // positions stay aligned while case and fullwidth folding still apply.
+    // Per character, so it is far slower than one bulk fold. Text whose length
+    // NFKC leaves alone -- almost everything -- takes the fast path instead.
     const alignedFold = (value = "") => {
+      const raw = String(value);
+      const bulk = normalize(raw);
+      if (bulk.length === raw.length) return bulk;
       let folded = "";
-      for (const character of String(value)) {
+      for (const character of raw) {
         const candidate = character.toLowerCase().normalize("NFKC");
         folded += candidate.length === character.length ? candidate : character;
       }
       return folded;
+    };
+    // One fold per record, kept on the record. Folding a whole request history to
+    // locate a single offset, on every keystroke and for every visible card, was
+    // the slowest thing the page did.
+    const alignedFoldFor = (record, raw) => {
+      if (record._aligned === undefined || record._alignedFor !== raw.length) {
+        record._aligned = alignedFold(raw);
+        record._alignedFor = raw.length;
+      }
+      return record._aligned;
     };
     const sourceClass = (source) => source === "kimi-desktop" ? "kimi" : (["codex", "claude", "kimi"].includes(source) ? source : "other");
 
@@ -628,27 +643,36 @@
       return new Intl.DateTimeFormat(LOCALE === "zh-CN" ? "zh-CN" : "en-US", {year:"numeric", month:"2-digit", day:"2-digit"}).format(date);
     }
 
-    // "quoted words" stay one term, and source:claude narrows by tool.
+    // "quoted words" stay one term, and source:claude narrows by tool. Terms are
+    // returned unfolded as well, because a caller has to fold a term the same way
+    // it folded the text being searched: a term folded by NFKC will not be found
+    // in text folded to keep its offsets, and the reader loses the match.
     function parseQuery(raw) {
-      const terms = [];
+      const words = [];
       const sources = [];
       const pattern = /"([^"]*)"|(\S+)/g;
       let match;
       while ((match = pattern.exec(String(raw || ""))) !== null) {
-        if (match[1] !== undefined) { terms.push(normalize(match[1])); continue; }
+        if (match[1] !== undefined) { words.push(match[1]); continue; }
         const word = match[2];
         const filter = /^source:(.+)$/i.exec(word);
         if (filter) { sources.push(normalize(filter[1])); continue; }
-        terms.push(normalize(word));
+        words.push(word);
       }
+      const kept = words.filter((word) => normalize(word)).slice(0, 8);
       return {
-        terms: terms.filter(Boolean).slice(0, 8),
+        terms: kept.map(normalize),
+        rawTerms: kept,
         sources: sources.filter(Boolean)
       };
     }
 
     function queryTokens(query) {
       return parseQuery(query).terms;
+    }
+
+    function alignedQueryTokens(query) {
+      return parseQuery(query).rawTerms.map(alignedFold);
     }
 
     function highlight(value, query) {
@@ -661,7 +685,7 @@
       // excerpt on the page.
       const folded = alignedFold(raw);
       const ranges = [];
-      terms.forEach((term) => {
+      alignedQueryTokens(query).forEach((term) => {
         let from = 0;
         while (from <= folded.length - term.length) {
           const at = folded.indexOf(term, from);
@@ -769,9 +793,9 @@
     const excerptHead = (raw) => raw.length > EXCERPT_HEAD ? `${raw.slice(0, EXCERPT_HEAD)}…` : raw;
     function matchedExcerpt(record, query) {
       const raw = String(record.excerpt || "");
-      const tokens = queryTokens(query);
+      const tokens = alignedQueryTokens(query);
       if (!raw || !tokens.length) return excerptHead(raw);
-      const normalized = alignedFold(raw);
+      const normalized = alignedFoldFor(record, raw);
       const positions = tokens
         .map((token) => normalized.indexOf(token))
         .filter((position) => position >= 0);

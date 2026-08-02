@@ -1276,62 +1276,106 @@ class ExcerptWindowTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         return (root / "static" / "index.html").read_text(encoding="utf-8")
 
-    def test_no_path_out_of_matchedexcerpt_returns_the_whole_record(self) -> None:
-        # Asserting on source text passed while the behaviour was broken, so this
-        # runs the real function instead. Node is not a build dependency, so the
-        # check is skipped where it is unavailable rather than failing the suite.
+    INTERFACE_PIECES = (
+        r"const normalize = [^\n]*",
+        r"const alignedFold = \(value = \"\"\) => \{.*?\n    \};",
+        r"const alignedFoldFor = \(record, raw\) => \{.*?\n    \};",
+        r"function parseQuery\(raw\) \{.*?\n    \}",
+        r"function queryTokens\(query\) \{.*?\n    \}",
+        r"function alignedQueryTokens\(query\) \{.*?\n    \}",
+        r"const EXCERPT_HEAD.*?function matchedExcerpt\(record, query\) \{.*?\n    \}",
+        r"function highlight\(value, query\).*?\n    \}",
+    )
+
+    def interface_functions(self) -> str:
+        """Return the real interface functions, ready to run under node."""
+        source = self.interface_source()
+        pieces = [
+            'const escapeHtml = (v = "") => String(v).replace(/[&<>\'"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\'":"&#39;",\'"\':"&quot;"}[c]));'
+        ]
+        for pattern in self.INTERFACE_PIECES:
+            found = re.search(pattern, source, re.S)
+            self.assertIsNotNone(found, pattern)
+            assert found is not None
+            pieces.append(found.group(0))
+        return "\n".join(pieces)
+
+    def run_node(self, body: str) -> dict:
         node = shutil.which("node")
         if not node:
             self.skipTest("node unavailable")
-        source = self.interface_source()
-        window = re.search(
-            r"(const alignedFold = \(value = \"\"\) => \{.*?\n    \};)", source, re.S
-        )
-        self.assertIsNotNone(window, "alignedFold not found")
-        assert window is not None
-        fold = window.group(1)
-        window = re.search(
-            r"(const EXCERPT_HEAD.*?\n    function matchedExcerpt\(record, query\) \{.*?\n    \})",
-            source,
-            re.S,
-        )
-        self.assertIsNotNone(window, "matchedExcerpt not found")
-        assert window is not None
-        harness = """
-const normalize = (value = "") => String(value).toLowerCase().normalize("NFKC");
-const queryTokens = (query) => String(query || "").split(/\\s+/).filter(Boolean).map(normalize);
-%s
-%s
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "check.mjs"
+            script.write_text(f"{self.interface_functions()}\n{body}", encoding="utf-8")
+            completed = subprocess.run(
+                [node, str(script)], capture_output=True, text=True, timeout=30
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return json.loads(completed.stdout)
+
+
+    def test_no_path_out_of_matchedexcerpt_returns_the_whole_record(self) -> None:
+        # Asserting on source text passed while the behaviour was broken, so this
+        # runs the real function instead.
+        results = self.run_node("""
 const long = "x".repeat(600000);
-const cjk = "阿特拉斯…" + "发布计划".repeat(60000);
+const cjk = "\u963f\u7279\u62c9\u65af\u2026" + "\u53d1\u5e03\u8ba1\u5212".repeat(60000);
 const cases = {
   emptyQuery: matchedExcerpt({excerpt: long}, ""),
   titleOnlyMatch: matchedExcerpt({excerpt: long}, "nowhere-in-the-body"),
   bodyMatch: matchedExcerpt({excerpt: "a".repeat(5000) + "needle" + "b".repeat(500000)}, "needle"),
-  foldDriftMatch: matchedExcerpt({excerpt: cjk}, "发布计划"),
+  foldDriftMatch: matchedExcerpt({excerpt: cjk}, "\u53d1\u5e03\u8ba1\u5212"),
   missing: matchedExcerpt({}, "anything"),
 };
 console.log(JSON.stringify(Object.fromEntries(
   Object.entries(cases).map(([name, value]) => [name, {
     length: value.length,
-    keepsMatch: value.includes("needle") || value.includes("发布计划"),
+    keepsMatch: value.includes("needle") || value.includes("\u53d1\u5e03\u8ba1\u5212"),
   }])
 )));
-""" % (fold, window.group(1))
-        with tempfile.TemporaryDirectory() as temporary:
-            script = Path(temporary) / "check.mjs"
-            script.write_text(harness, encoding="utf-8")
-            completed = subprocess.run(
-                [node, str(script)], capture_output=True, text=True, timeout=30
-            )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        results = json.loads(completed.stdout)
+""")
         for name, outcome in results.items():
             self.assertLessEqual(outcome["length"], 1000, f"{name} returned {outcome['length']}")
-        # A record whose text folds to a different length still shows the match,
-        # rather than falling back to the opening characters.
         self.assertTrue(results["foldDriftMatch"]["keepsMatch"])
         self.assertTrue(results["bodyMatch"]["keepsMatch"])
+
+    def test_a_query_that_survives_the_filter_still_shows_its_match(self) -> None:
+        # A term folded one way cannot be found in text folded another way. When
+        # that happened a record matched the list, then showed its opening
+        # characters with nothing marked -- worst in Chinese, where …… is ordinary
+        # punctuation.
+        results = self.run_node("""
+const queries = ["\u2026\u2026\u4fee\u590d", "\u2103", "\u2162", "\ufb01le", "atlas", "\u5171\u4eab", "\uff21\uff22\uff23"];
+const out = {};
+for (const query of queries) {
+  const record = {excerpt: "lead text ".repeat(120) + query + " trailing text ".repeat(200)};
+  const shown = matchedExcerpt(record, query);
+  out[query] = {
+    bounded: shown.length <= 1000,
+    inWindow: shown.includes(query),
+    highlighted: highlight(shown, query).includes("<mark>"),
+  };
+}
+console.log(JSON.stringify(out));
+""")
+        for query, outcome in results.items():
+            self.assertTrue(outcome["bounded"], query)
+            self.assertTrue(outcome["inWindow"], query)
+            self.assertTrue(outcome["highlighted"], query)
+
+    def test_the_aligned_fold_is_reused_per_record(self) -> None:
+        # Folding a whole request history per card per keystroke was the slowest
+        # thing on the page, so the result has to be kept.
+        source = self.interface_source()
+        self.assertIn("alignedFoldFor(record, raw)", source)
+        self.assertIn("record._aligned", source)
+        # The bulk path must come first; the per-character loop is the exception.
+        fold = re.search(r"const alignedFold = \(value = \"\"\) => \{(.*?)\n    \};", source, re.S)
+        assert fold is not None
+        self.assertLess(
+            fold.group(1).index("normalize(raw)"),
+            fold.group(1).index("for (const character"),
+        )
 
     def test_the_body_ranking_signal_stays_under_the_metadata_weights(self) -> None:
         node = shutil.which("node")
