@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -27,6 +30,62 @@ class AutomaticPathsTest(unittest.TestCase):
             },
         )
         self.assertEqual(app.DEFAULT_CONFIG["locale"], "en")
+        # The documented knob is the per-request ceiling, so it must have effect.
+        self.assertEqual(app.DEFAULT_CONFIG["max_prompt_chars"], app.MAX_TURN_CHARS)
+
+    def test_every_parser_reports_a_request_it_shortened(self) -> None:
+        # All four adapters honour the same ceiling and account for a clipped
+        # request, so the README promise holds for every source.
+        oversized = "pasted content " * 900
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            claude = root / "c.jsonl"
+            claude.write_text(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "sessionId": "sess-cap-001",
+                        "cwd": str(root),
+                        "timestamp": "2026-07-20T10:00:00Z",
+                        "message": {"content": oversized},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            codex = root / "x.jsonl"
+            codex.write_text(
+                "\n".join(
+                    json.dumps(row)
+                    for row in (
+                        {
+                            "type": "session_meta",
+                            "payload": {"id": "codex-cap-001", "cwd": str(root)},
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {"role": "user", "content": oversized},
+                        },
+                    )
+                ),
+                encoding="utf-8",
+            )
+            kimi_dir = root / "conv-cap-001"
+            kimi_dir.mkdir()
+            kimi = kimi_dir / "state.json"
+            kimi.write_text(
+                json.dumps({"id": "conv-cap-001", "title": "cap", "lastPrompt": oversized}),
+                encoding="utf-8",
+            )
+            parsed = {
+                "claude": app.parse_claude(claude, 9000),
+                "codex": app.parse_codex(codex, 9000),
+                "kimi": app.parse_kimi(kimi, 9000),
+                "kimi-desktop": app.parse_kimi_desktop(kimi, 9000),
+            }
+        for source, record in parsed.items():
+            assert record is not None, source
+            self.assertLessEqual(len(record["excerpt"]), 9000 + 100, source)
+            self.assertEqual(record["truncated_turns"], 1, source)
 
     def test_locale_normalization_is_deterministic(self) -> None:
         self.assertEqual(app.normalize_locale("en"), "en")
@@ -402,6 +461,155 @@ class ClaudeTranscriptParserTest(unittest.TestCase):
         assert record is not None
         self.assertEqual(record["title"], "Desktop rename")
         self.assertEqual(record["title_source"], "desktop-user")
+
+
+class PromptRecallTest(unittest.TestCase):
+    """Every user turn stays searchable, however long the conversation runs.
+
+    A per-session budget kept only the oldest text, so the most recent request in
+    a long session -- usually the most useful clue -- was unfindable.
+    """
+
+    def write_claude(self, directory: Path, prompts: list[str]) -> Path:
+        rows: list[dict] = []
+        for position, text in enumerate(prompts):
+            rows.append(
+                {
+                    "type": "user",
+                    "sessionId": "sess-recall-001",
+                    "cwd": "/srv/projects/atlas",
+                    "timestamp": f"2026-07-20T10:{position:02d}:00Z",
+                    "message": {"content": text},
+                }
+            )
+        path = directory / "recall.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+            encoding="utf-8",
+        )
+        return path
+
+    def write_codex(self, directory: Path, prompts: list[str]) -> Path:
+        rows: list[dict] = [
+            {
+                "type": "session_meta",
+                "timestamp": "2026-07-20T09:00:00Z",
+                "payload": {"id": "codex-recall-001", "cwd": "/srv/projects/atlas"},
+            }
+        ]
+        for text in prompts:
+            rows.append(
+                {
+                    "type": "response_item",
+                    "timestamp": "2026-07-20T09:01:00Z",
+                    "payload": {"role": "user", "content": text},
+                }
+            )
+        path = directory / "recall-codex.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_a_late_turn_past_the_old_budget_stays_searchable(self) -> None:
+        # The session total far exceeds the old 9000 budget, which used to drop
+        # every turn after it was spent. Each individual turn stays under the
+        # per-turn ceiling, so nothing here is legitimately truncated.
+        filler = ["padding request " * 400 for _ in range(6)]
+        needle = "locate the orchid teardown"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_claude(Path(temporary), [*filler, needle])
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertIn("orchid teardown", record["excerpt"])
+        self.assertGreater(len(record["excerpt"]), 9000)
+        self.assertEqual(record["truncated_turns"], 0)
+
+    def test_codex_also_keeps_a_late_turn(self) -> None:
+        # Both parsers shared the budget pattern; changing one is not enough.
+        filler = ["padding request " * 400 for _ in range(6)]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_codex(Path(temporary), [*filler, "orchid teardown"])
+            record = app.parse_codex(path, 9000)
+        assert record is not None
+        self.assertIn("orchid teardown", record["excerpt"])
+
+    def test_message_count_reports_every_user_turn(self) -> None:
+        prompts = [f"request number {index} " + "filler " * 300 for index in range(12)]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_claude(Path(temporary), prompts)
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertEqual(record["message_count"], 12)
+
+    def test_one_enormous_turn_is_capped_and_reported(self) -> None:
+        oversized = "x" * (app.MAX_TURN_CHARS + 5000)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_claude(Path(temporary), ["a short request", oversized])
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertLessEqual(len(record["excerpt"]), app.MAX_TURN_CHARS + 200)
+        # A silent truncation is what this change exists to remove.
+        self.assertEqual(record["truncated_turns"], 1)
+
+    def test_a_capped_turn_reaches_the_index_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            self.write_codex(sessions, ["x" * (app.MAX_TURN_CHARS + 10)])
+            config = {
+                "max_prompt_chars": 9000,
+                "sources": {
+                    "codex": str(sessions),
+                    "claude": str(root / "absent"),
+                    "kimi": str(root / "absent"),
+                    "kimi-desktop": str(root / "absent"),
+                },
+            }
+            with (
+                patch.object(app, "DATA_DIR", root),
+                patch.object(app, "INDEX_FILE", root / "index.json"),
+                patch.object(app, "PARSE_CACHE_FILE", root / "parse-cache.json"),
+                patch.object(app, "PROJECTS_FILE", root / "projects.json"),
+                patch.object(app, "MANUAL_FILE", root / "manual.json"),
+                patch.object(app, "DEMO_MODE", False),
+                patch.object(app, "INDEX_CACHE", {"key": None, "payload": None}),
+                patch.object(app, "load_config", return_value=config),
+            ):
+                payload = app.build_index()
+        self.assertTrue(
+            any("truncated" in warning for warning in payload["warnings"]),
+            payload["warnings"],
+        )
+
+    def test_an_injected_skill_payload_is_stripped_from_any_directory(self) -> None:
+        # The strip used to anchor on ~/Library/Application Support, so a skill
+        # shipped from a plugin cache reached the index intact. Full-text indexing
+        # made that far more visible.
+        for base in (
+            Path.home() / "Library" / "Application Support" / "pack" / "skills" / "demo",
+            Path.home() / ".claude" / "plugins" / "cache" / "pack" / "skills" / "demo",
+        ):
+            prompt = (
+                "find the launch checklist\n\n"
+                f"Base directory for this skill: {base}\n"
+                "---\nname: demo\n---\nInternal skill instructions follow."
+            )
+            cleaned = app.clean_user_text(prompt)
+            self.assertIn("launch checklist", cleaned)
+            self.assertNotIn("Base directory for this skill", cleaned, str(base))
+            self.assertNotIn("Internal skill instructions", cleaned, str(base))
+
+    def test_the_record_does_not_store_the_same_text_twice(self) -> None:
+        # excerpt already is the joined turns; a second copy would duplicate the
+        # corpus in the index, every API response, and the parse cache.
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_claude(Path(temporary), ["first request", "second request"])
+            record = app.parse_claude(path, 9000)
+        assert record is not None
+        self.assertNotIn("turns", record)
 
 
 class ProjectNamingTest(unittest.TestCase):
@@ -1054,6 +1262,246 @@ class ManualTraceEndpointTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(body["error_code"], "trace_missing")
         self.assertEqual(len(self.stored_traces()), 1)
+
+
+class ExcerptWindowTest(unittest.TestCase):
+    """The card shows two clamped lines, so no path may hand it the whole record.
+
+    Removing the 9000-character index cap removed the only bound on the two
+    matchedExcerpt paths that returned the excerpt untouched: an empty query, and
+    a query that matched only the title, project, or workspace.
+    """
+
+    def interface_source(self) -> str:
+        root = Path(__file__).resolve().parents[1]
+        return (root / "static" / "index.html").read_text(encoding="utf-8")
+
+    INTERFACE_PIECES = (
+        r"const normalize = [^\n]*",
+        r"const alignedFold = \(value = \"\"\) => \{.*?\n    \};",
+        r"function rawOffsetOfFolded\(chunk, foldedOffset\) \{.*?\n    \}",
+        r"const SCAN_WINDOW = \d+;\n    function findEarliestOffset\(raw, alignedTerms, normalizedTerms\) \{.*?\n    \}",
+        r"function parseQuery\(raw\) \{.*?\n    \}",
+        r"function queryTokens\(query\) \{.*?\n    \}",
+        r"const EXCERPT_HEAD.*?function matchedExcerpt\(record, query\) \{.*?\n    \}",
+        r"function highlight\(value, query\).*?\n    \}",
+    )
+
+    def interface_functions(self) -> str:
+        """Return the real interface functions, ready to run under node."""
+        source = self.interface_source()
+        pieces = [
+            'const escapeHtml = (v = "") => String(v).replace(/[&<>\'"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\'":"&#39;",\'"\':"&quot;"}[c]));'
+        ]
+        for pattern in self.INTERFACE_PIECES:
+            found = re.search(pattern, source, re.S)
+            self.assertIsNotNone(found, pattern)
+            assert found is not None
+            pieces.append(found.group(0))
+        return "\n".join(pieces)
+
+    def run_node(self, body: str) -> dict:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "check.mjs"
+            script.write_text(f"{self.interface_functions()}\n{body}", encoding="utf-8")
+            completed = subprocess.run(
+                [node, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=30
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return json.loads(completed.stdout)
+
+
+    def test_no_path_out_of_matchedexcerpt_returns_the_whole_record(self) -> None:
+        # Asserting on source text passed while the behaviour was broken, so this
+        # runs the real function instead.
+        results = self.run_node("""
+const long = "x".repeat(600000);
+const cjk = "\u963f\u7279\u62c9\u65af\u2026" + "\u53d1\u5e03\u8ba1\u5212".repeat(60000);
+const cases = {
+  emptyQuery: matchedExcerpt({excerpt: long}, ""),
+  titleOnlyMatch: matchedExcerpt({excerpt: long}, "nowhere-in-the-body"),
+  bodyMatch: matchedExcerpt({excerpt: "a".repeat(5000) + "needle" + "b".repeat(500000)}, "needle"),
+  foldDriftMatch: matchedExcerpt({excerpt: cjk}, "\u53d1\u5e03\u8ba1\u5212"),
+  missing: matchedExcerpt({}, "anything"),
+};
+console.log(JSON.stringify(Object.fromEntries(
+  Object.entries(cases).map(([name, value]) => [name, {
+    length: value.length,
+    keepsMatch: value.includes("needle") || value.includes("\u53d1\u5e03\u8ba1\u5212"),
+  }])
+)));
+""")
+        for name, outcome in results.items():
+            self.assertLessEqual(outcome["length"], 1000, f"{name} returned {outcome['length']}")
+        self.assertTrue(results["foldDriftMatch"]["keepsMatch"])
+        self.assertTrue(results["bodyMatch"]["keepsMatch"])
+
+    def test_a_query_that_survives_the_filter_still_shows_its_match(self) -> None:
+        # A term folded one way cannot be found in text folded another way. When
+        # that happened a record matched the list, then showed its opening
+        # characters with nothing marked -- worst in Chinese, where …… is ordinary
+        # punctuation.
+        results = self.run_node("""
+// The pair is [text as the record spells it, term as the reader types it]. They
+// differ where NFKC expands, which is where the two folds used to disagree.
+const pairs = [
+  ["\u2026\u2026\u4fee\u590d", "\u2026\u2026\u4fee\u590d"],
+  ["\u2103", "\u2103"],
+  ["\u2162", "\u2162"],
+  ["\ufb01le", "\ufb01le"],
+  ["the \ufb01le here", "file"],
+  ["report\u2026done", "report...done"],
+  ["area 5\u33a1", "5m2"],
+  ["atlas", "atlas"],
+  ["\u5171\u4eab", "\u5171\u4eab"],
+  ["\uff21\uff22\uff23", "abc"],
+];
+const out = {};
+for (const [text, query] of pairs) {
+  const record = {excerpt: "lead text ".repeat(120) + text + " trailing text ".repeat(200)};
+  const shown = matchedExcerpt(record, query);
+  out[text + " <- " + query] = {
+    bounded: shown.length <= 1000,
+    inWindow: shown.includes(text),
+    highlighted: highlight(shown, query).includes("<mark>"),
+  };
+}
+console.log(JSON.stringify(out));
+""")
+        self.assertGreaterEqual(len(results), 10)
+        for label, outcome in results.items():
+            self.assertTrue(outcome["bounded"], label)
+            self.assertTrue(outcome["inWindow"], label)
+            self.assertTrue(outcome["highlighted"], label)
+
+    def test_locating_a_match_does_not_scale_with_the_record(self) -> None:
+        # A record holds a whole request history now. Folding all of it to find one
+        # offset made typing crawl, and one … anywhere put the entire string on the
+        # slow per-character path. Cost is asserted, not the shape of the code.
+        results = self.run_node("""
+const near = "\\u2026 lead ".repeat(40) + "needle" + " tail text".repeat(200);
+const far = "\\u2026 lead ".repeat(40) + " filler".repeat(120000) + "needle";
+const time = (fn) => { const t = process.hrtime.bigint(); fn(); return Number(process.hrtime.bigint() - t) / 1e6; };
+console.log(JSON.stringify({
+  smallMs: time(() => matchedExcerpt({excerpt: near}, "needle")),
+  // Same term, but a megabyte of expanding-character text before it.
+  largeMs: time(() => matchedExcerpt({excerpt: far}, "needle")),
+  largeChars: far.length,
+  bothFound: matchedExcerpt({excerpt: near}, "needle").includes("needle")
+    && matchedExcerpt({excerpt: far}, "needle").includes("needle"),
+}));
+""")
+        self.assertTrue(results["bothFound"])
+        self.assertGreater(results["largeChars"], 500_000)
+        # Generous enough for a loaded CI runner, far under the seconds a full
+        # per-character fold of this string took.
+        self.assertLess(results["largeMs"], 400, results)
+
+    def test_the_body_ranking_signal_stays_under_the_metadata_weights(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable")
+        source = self.interface_source()
+        block = re.search(
+            r"(const BODY_TERM_LIMIT.*?\n    function bodyTermScore\(record, token\) \{.*?\n    \})",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(block, "bodyTermScore not found")
+        assert block is not None
+        harness = """
+const normalize = (value = "") => String(value).toLowerCase().normalize("NFKC");
+const recordSearchText = (record) => record._search;
+%s
+const score = (n) => bodyTermScore({_search: "needle ".repeat(n)}, "needle");
+console.log(JSON.stringify({
+  one: score(1), ten: score(10), many: score(5000),
+  monotonic: score(1) < score(10) && score(10) < score(100),
+  absent: score(0),
+}));
+""" % block.group(1)
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "score.mjs"
+            script.write_text(harness, encoding="utf-8")
+            completed = subprocess.run(
+                [node, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=30
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["absent"], 0)
+        self.assertTrue(result["monotonic"])
+        # A project or title hit adds 18. Frequency has to stay a tiebreaker under
+        # that, however often a long session repeats the word.
+        self.assertLess(result["many"], 18)
+
+
+class ResponseCompressionTest(DemoServerTestCase):
+    """The index carries every request now, so it travels compressed."""
+
+    def test_the_index_is_gzipped_for_a_client_that_accepts_it(self) -> None:
+        status, headers, body = self.raw_request(
+            "GET", "/api/index", headers={"Accept-Encoding": "gzip, deflate"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("content-encoding"), "gzip")
+        self.assertIn("accept-encoding", str(headers.get("vary", "")).lower())
+        payload = json.loads(gzip.decompress(body).decode("utf-8"))
+        self.assertTrue(payload["demo"])
+        self.assertEqual(len(payload["records"]), 20)
+
+    def test_the_same_index_is_plain_json_without_the_header(self) -> None:
+        status, headers, body = self.raw_request("GET", "/api/index")
+        self.assertEqual(status, 200)
+        self.assertNotIn("content-encoding", headers)
+        self.assertEqual(len(json.loads(body.decode("utf-8"))["records"]), 20)
+
+    def test_compression_does_not_change_what_the_reader_receives(self) -> None:
+        _, _, plain = self.raw_request("GET", "/api/index")
+        _, _, packed = self.raw_request(
+            "GET", "/api/index", headers={"Accept-Encoding": "gzip"}
+        )
+        # Demo timestamps are offsets from the moment of the call, so compare the
+        # fields that identify a record rather than the whole payload.
+        def identity(body: bytes) -> list[tuple[str, str, str]]:
+            return [
+                (record["id"], record["title"], record["excerpt"])
+                for record in json.loads(body.decode("utf-8"))["records"]
+            ]
+
+        self.assertEqual(identity(plain), identity(gzip.decompress(packed)))
+        self.assertLess(len(packed), len(plain))
+
+    def test_a_content_length_matches_the_compressed_body(self) -> None:
+        # A mismatch here hangs the browser rather than failing loudly.
+        _, headers, body = self.raw_request(
+            "GET", "/api/index", headers={"Accept-Encoding": "gzip"}
+        )
+        self.assertEqual(int(headers.get("content-length", "0")), len(body))
+
+    def test_an_identity_only_client_is_not_sent_gzip(self) -> None:
+        _, headers, _ = self.raw_request(
+            "GET", "/api/index", headers={"Accept-Encoding": "identity"}
+        )
+        self.assertNotIn("content-encoding", headers)
+
+    def test_a_quality_of_zero_is_read_as_a_refusal(self) -> None:
+        # q=0 means the client refuses the encoding. Asserted over the wire
+        # rather than against the helper, because that is where it went wrong.
+        for header in ("gzip;q=0", "identity;q=1, gzip;q=0", "gzip; q=0"):
+            _, headers, _ = self.raw_request(
+                "GET", "/api/index", headers={"Accept-Encoding": header}
+            )
+            self.assertNotIn("content-encoding", headers, header)
+
+    def test_a_weighted_acceptance_still_compresses(self) -> None:
+        for header in ("gzip;q=0.5", "br;q=1.0, gzip;q=0.8", "x-gzip"):
+            _, headers, _ = self.raw_request(
+                "GET", "/api/index", headers={"Accept-Encoding": header}
+            )
+            self.assertEqual(headers.get("content-encoding"), "gzip", header)
 
 
 class LocalApiBoundaryTest(DemoServerTestCase):

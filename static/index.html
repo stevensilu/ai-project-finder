@@ -592,6 +592,84 @@
     const $ = (selector) => document.querySelector(selector);
     const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
     const normalize = (value = "") => String(value).toLowerCase().normalize("NFKC");
+    // Folding for work that measures an offset and then slices the original. NFKC
+    // changes length on characters ordinary in real text -- … becomes three dots,
+    // and …… is standard Chinese punctuation -- which shifted every offset. Any
+    // character that would expand keeps its own length here, so positions stay
+    // aligned while case and fullwidth folding still apply.
+    //
+    // The per-character path costs about thirty times one bulk fold, so text NFKC
+    // leaves alone takes the bulk path. Callers must still bound what they hand
+    // over: a single … in a long request history would otherwise put the whole
+    // thing on the slow path.
+    const alignedFold = (value = "") => {
+      const raw = String(value);
+      const bulk = normalize(raw);
+      if (bulk.length === raw.length) return bulk;
+      let folded = "";
+      for (const character of raw) {
+        const candidate = character.toLowerCase().normalize("NFKC");
+        folded += candidate.length === character.length ? candidate : character;
+      }
+      return folded;
+    };
+    // Where a term sits in a record, searched a window at a time so the work does
+    // not grow with the length of the request history. A term is looked for both
+    // folded and NFKC-normalized: the filter that decided this record matches uses
+    // NFKC, and a reader who searched a word that appears in the text as ﬁ or ㎡
+    // should still be shown where it matched.
+    // Where an NFKC match sits in the original text. Folding can lengthen a
+    // string, so the offset it reports is not an offset into the original; this
+    // walks character by character until enough folded output has been produced.
+    function rawOffsetOfFolded(chunk, foldedOffset) {
+      let produced = 0;
+      let position = 0;
+      for (const character of chunk) {
+        if (produced >= foldedOffset) return position;
+        produced += normalize(character).length;
+        position += character.length;
+      }
+      return produced >= foldedOffset ? position : -1;
+    }
+
+    // The earliest offset in the text at which any of these terms appears, found a
+    // window at a time so the work does not grow with the length of a request
+    // history. Every term is tested against the same folded window, because
+    // folding once per term made an eight-word query eight times the work.
+    const SCAN_WINDOW = 8192;
+    function findEarliestOffset(raw, alignedTerms, normalizedTerms) {
+      const longest = Math.max(
+        0,
+        ...alignedTerms.map((term) => term.length),
+        ...normalizedTerms.map((term) => term.length)
+      );
+      if (!longest) return -1;
+      const step = Math.max(1, SCAN_WINDOW - longest);
+      for (let start = 0; start < raw.length; start += step) {
+        const chunk = raw.slice(start, start + SCAN_WINDOW);
+        const folded = alignedFold(chunk);
+        let best = -1;
+        alignedTerms.forEach((term) => {
+          if (!term) return;
+          const at = folded.indexOf(term);
+          if (at >= 0 && (best < 0 || at < best)) best = at;
+        });
+        if (best >= 0) return start + best;
+        // The filter matched this record on NFKC, so a word the text spells as ﬁ
+        // or ㎡ has to be findable here too. That offset needs translating back.
+        const bulk = normalize(chunk);
+        const aligned = bulk.length === chunk.length;
+        normalizedTerms.forEach((term) => {
+          if (!term) return;
+          const at = bulk.indexOf(term);
+          if (at < 0) return;
+          const mapped = aligned ? at : rawOffsetOfFolded(chunk, at);
+          if (mapped >= 0 && (best < 0 || mapped < best)) best = mapped;
+        });
+        if (best >= 0) return start + best;
+      }
+      return -1;
+    }
     const sourceClass = (source) => source === "kimi-desktop" ? "kimi" : (["codex", "claude", "kimi"].includes(source) ? source : "other");
 
     function updateThemeLabel() { $("#themeBtn").textContent = root.getAttribute("data-theme") === "dark" ? copy.lightsOn : copy.lightsOff; }
@@ -614,21 +692,26 @@
       return new Intl.DateTimeFormat(LOCALE === "zh-CN" ? "zh-CN" : "en-US", {year:"numeric", month:"2-digit", day:"2-digit"}).format(date);
     }
 
-    // "quoted words" stay one term, and source:claude narrows by tool.
+    // "quoted words" stay one term, and source:claude narrows by tool. Terms are
+    // returned unfolded as well, because a caller has to fold a term the same way
+    // it folded the text being searched: a term folded by NFKC will not be found
+    // in text folded to keep its offsets, and the reader loses the match.
     function parseQuery(raw) {
-      const terms = [];
+      const words = [];
       const sources = [];
       const pattern = /"([^"]*)"|(\S+)/g;
       let match;
       while ((match = pattern.exec(String(raw || ""))) !== null) {
-        if (match[1] !== undefined) { terms.push(normalize(match[1])); continue; }
+        if (match[1] !== undefined) { words.push(match[1]); continue; }
         const word = match[2];
         const filter = /^source:(.+)$/i.exec(word);
         if (filter) { sources.push(normalize(filter[1])); continue; }
-        terms.push(normalize(word));
+        words.push(word);
       }
+      const kept = words.filter((word) => normalize(word)).slice(0, 8);
       return {
-        terms: terms.filter(Boolean).slice(0, 8),
+        terms: kept.map(normalize),
+        rawTerms: kept,
         sources: sources.filter(Boolean)
       };
     }
@@ -639,20 +722,42 @@
 
     function highlight(value, query) {
       const raw = String(value ?? "");
-      const terms = queryTokens(query);
-      if (!raw || !terms.length) return escapeHtml(raw);
-      const folded = normalize(raw);
-      // Folding can change length on rare inputs. Offsets would then be wrong,
-      // so the text is returned unhighlighted rather than mangled.
-      if (folded.length !== raw.length) return escapeHtml(raw);
+      const parsed = parseQuery(query);
+      if (!raw || !parsed.rawTerms.length) return escapeHtml(raw);
+      // Aligned folding keeps these offsets valid on text NFKC would lengthen.
+      // The guard this replaces returned the text unhighlighted, and because a
+      // windowed excerpt always begins with …, it was reached for every excerpt on
+      // the page. Values arriving here are already windowed, so this is short.
+      const folded = alignedFold(raw);
+      const bulk = normalize(raw);
+      const aligned = bulk.length === raw.length;
       const ranges = [];
-      terms.forEach((term) => {
+      parsed.rawTerms.forEach((rawTerm, index) => {
+        const alignedTerm = alignedFold(rawTerm);
+        let found = false;
         let from = 0;
-        while (from <= folded.length - term.length) {
-          const at = folded.indexOf(term, from);
+        while (alignedTerm && from <= folded.length - alignedTerm.length) {
+          const at = folded.indexOf(alignedTerm, from);
           if (at < 0) break;
-          ranges.push([at, at + term.length]);
-          from = at + term.length;
+          found = true;
+          ranges.push([at, at + alignedTerm.length]);
+          from = at + alignedTerm.length;
+        }
+        // Only needed when this text spells something differently from its folded
+        // form, as ﬁ or ㎡ does. Skipping it otherwise matters: a term that occurs
+        // thousands of times would translate an offset on each hit.
+        const bulkTerm = parsed.terms[index];
+        if (found || !bulkTerm || folded === bulk) return;
+        let bulkFrom = 0;
+        while (bulkFrom <= bulk.length - bulkTerm.length) {
+          const at = bulk.indexOf(bulkTerm, bulkFrom);
+          if (at < 0) break;
+          bulkFrom = at + bulkTerm.length;
+          const start = aligned ? at : rawOffsetOfFolded(raw, at);
+          const stop = aligned
+            ? at + bulkTerm.length
+            : rawOffsetOfFolded(raw, at + bulkTerm.length);
+          if (start >= 0 && stop > start) ranges.push([start, Math.min(stop, raw.length)]);
         }
       });
       if (!ranges.length) return escapeHtml(raw);
@@ -710,6 +815,25 @@
       return 0.9;
     }
 
+    // How often a term appears in the request text, damped and capped. Without
+    // this every conversation-text match scored the same flat base and the whole
+    // group tied at the bottom. The cap keeps it a tiebreaker: a long session
+    // that says a word often must not outrank a session named after it.
+    // Counting stops here, which is also what bounds the score: 1 + log(64) is
+    // about 5.2, comfortably under the 18 a project or title match adds.
+    const BODY_TERM_LIMIT = 64;
+    function bodyTermScore(record, token) {
+      if (!token) return 0;
+      const haystack = recordSearchText(record);
+      let count = 0;
+      let from = haystack.indexOf(token);
+      while (from >= 0 && count < BODY_TERM_LIMIT) {
+        count += 1;
+        from = haystack.indexOf(token, from + token.length);
+      }
+      return count ? 1 + Math.log(count) : 0;
+    }
+
     function scoreRecord(record, tokens) {
       if (!tokens.length) return 0;
       const title = normalize(record.title);
@@ -723,19 +847,27 @@
         const titleAt = title.indexOf(token);
         if (titleAt >= 0) value += titleAt < 20 ? 18 : 12;
         if (cwd.includes(token)) value += 8;
-        return score + value;
+        return score + value + bodyTermScore(record, token);
       }, 0);
       return base * recencyWeight(record.updated_at);
     }
 
+    // A record now holds the whole request history, so every path out of here
+    // has to be bounded. The card shows two clamped lines; handing the browser a
+    // 250 KB string to hide costs layout and buys nothing.
+    const EXCERPT_HEAD = 900;
+    const excerptHead = (raw) => raw.length > EXCERPT_HEAD ? `${raw.slice(0, EXCERPT_HEAD)}…` : raw;
     function matchedExcerpt(record, query) {
       const raw = String(record.excerpt || "");
-      const tokens = queryTokens(query);
-      if (!raw || !tokens.length) return raw;
-      const normalized = normalize(raw);
-      const positions = tokens.map((token) => normalized.indexOf(token)).filter((position) => position >= 0);
-      if (!positions.length) return raw;
-      const start = Math.max(0, Math.min(...positions) - 120);
+      const parsed = parseQuery(query);
+      if (!raw || !parsed.rawTerms.length) return excerptHead(raw);
+      const at = findEarliestOffset(
+        raw,
+        parsed.rawTerms.map(alignedFold),
+        parsed.terms
+      );
+      if (at < 0) return excerptHead(raw);
+      const start = Math.max(0, at - 120);
       const end = Math.min(raw.length, start + 820);
       return `${start > 0 ? "…" : ""}${raw.slice(start, end)}${end < raw.length ? "…" : ""}`;
     }

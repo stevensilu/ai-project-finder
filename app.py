@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import gzip
 import json
 import os
 import re
@@ -46,9 +47,16 @@ DEMO_MODE = False
 IS_WINDOWS = os.name == "nt"
 APP_LOCALE = "en"
 
+# The default for max_prompt_chars: how long one request may be before it is
+# shortened. It sits well above the longest request seen in real histories, so it
+# never fires on ordinary work and only bounds a pathological paste. The old 9000
+# default was spent across a whole session rather than per request, which is what
+# put the later turns of a long conversation out of reach.
+MAX_TURN_CHARS = 50_000
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "port": 4388,
-    "max_prompt_chars": 9000,
+    "max_prompt_chars": MAX_TURN_CHARS,
     "locale": "en",
     "sources": {
         "codex": "auto",
@@ -73,8 +81,10 @@ INTERNAL_STORAGE_PATH_RE = re.compile(
     rf"{HOME_PATTERN}/Library/Application Support/[^\s\n\r\"'<>]+",
     re.IGNORECASE,
 )
+# Any location, not only Application Support: skills also ship from plugin
+# caches under the home directory, and those payloads were reaching the index.
 INJECTED_SKILL_PAYLOAD_RE = re.compile(
-    rf"\s*Base directory for this skill:\s*{HOME_PATTERN}/Library/Application Support/[\s\S]*$",
+    rf"\s*Base directory for this skill:\s*{HOME_PATTERN}{PATH_SEPARATOR_PATTERN}[\s\S]*$",
     re.IGNORECASE,
 )
 SPACE_RE = re.compile(r"\s+")
@@ -134,11 +144,16 @@ NAMING_RULES: dict[str, list[str]] = {
 # refresh off the full-rescan path.
 INDEX_CACHE: dict[str, Any] = {"key": None, "payload": None}
 INDEX_CACHE_LOCK = threading.Lock()
+# The compressed copy of the last body sent, so repeat reads skip the work.
+GZIP_CACHE: dict[str, Any] = {"raw": None, "gzip": None}
+GZIP_CACHE_LOCK = threading.Lock()
+# Below this, a gzip frame costs more than it saves.
+GZIP_MIN_BYTES = 1024
 BUILD_LOCK = threading.Lock()
 PARSE_CACHE_FILE = DATA_DIR / "parse-cache.json"
 PROJECTS_FILE = DATA_DIR / "projects.json"
 # Bump when a parser changes what it extracts, so stale entries are discarded.
-PARSE_CACHE_VERSION = 2
+PARSE_CACHE_VERSION = 3
 
 
 def environment_home(name: str, default: Path) -> Path:
@@ -339,6 +354,27 @@ def demo_open_mode(record: dict[str, Any], action: str) -> str:
         "kimi": "kimi-web",
         "kimi-desktop": "kimi-desktop",
     }.get(source, "local")
+
+
+def compressed_index_body(body: bytes) -> bytes | None:
+    """Compress a response body, reusing the last result for an identical body.
+
+    Compressing the whole index costs tens of milliseconds, and the index is
+    served again on every open action and health poll.
+    """
+    with GZIP_CACHE_LOCK:
+        if GZIP_CACHE.get("raw") == body:
+            cached = GZIP_CACHE.get("gzip")
+            if isinstance(cached, bytes):
+                return cached
+    try:
+        compressed = gzip.compress(body, 6)
+    except (OSError, ValueError):
+        return None
+    with GZIP_CACHE_LOCK:
+        GZIP_CACHE["raw"] = body
+        GZIP_CACHE["gzip"] = compressed
+    return compressed
 
 
 def cache_index_payload(payload: dict[str, Any]) -> None:
@@ -997,6 +1033,18 @@ def find_artifacts(text: str) -> list[str]:
     return found
 
 
+def clip_prompts(prompts: list[str], max_prompt_chars: int) -> tuple[list[str], int]:
+    """Shorten any single request past the ceiling, and say how many were cut."""
+    clipped: list[str] = []
+    truncated = 0
+    for text in prompts:
+        if len(text) > max_prompt_chars:
+            text = text[:max_prompt_chars]
+            truncated += 1
+        clipped.append(text)
+    return clipped, truncated
+
+
 def make_record(
     *,
     source: str,
@@ -1010,11 +1058,16 @@ def make_record(
     message_count: int,
     origin: str,
 ) -> dict[str, Any]:
-    clean_prompts = [clean_user_text(item) for item in prompts if clean_user_text(item)]
+    clean_prompts = [
+        cleaned for cleaned in (clean_user_text(item) for item in prompts) if cleaned
+    ]
     combined = "\n".join(clean_prompts)
     project, customer = canonical_project(cwd, title)
     artifacts = find_artifacts(combined)
-    excerpt = combined[:9000]
+    # The whole request history stays searchable. A second cap here used to keep
+    # only the opening 9000 characters, which put the most recent request in a
+    # long session out of reach and made max_prompt_chars inert above ~40000.
+    excerpt = combined
     return {
         "id": f"{source}:{session_id}",
         "source": source,
@@ -1053,7 +1106,7 @@ def is_user_initiated_codex_session(meta: dict[str, Any]) -> bool:
 def parse_codex(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
     meta: dict[str, Any] = {}
     prompts: list[str] = []
-    total_chars = 0
+    truncated_turns = 0
     created = ""
     updated = ""
     message_count = 0
@@ -1070,9 +1123,11 @@ def parse_codex(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
             payload = row.get("payload", {})
             if isinstance(payload, dict) and payload.get("role") == "user":
                 text = text_from_content(payload.get("content"))
-                if text and total_chars < max_prompt_chars:
-                    prompts.append(text[: max_prompt_chars - total_chars])
-                    total_chars += len(text)
+                if text:
+                    if len(text) > max_prompt_chars:
+                        text = text[:max_prompt_chars]
+                        truncated_turns += 1
+                    prompts.append(text)
                     message_count += 1
     if not meta and not prompts:
         return None
@@ -1082,7 +1137,7 @@ def parse_codex(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
     session_id = str(meta.get("id") or meta.get("session_id") or path.stem)
     cwd = str(meta.get("cwd") or "")
     title = title_from_prompts(prompts, Path(cwd).name)
-    return make_record(
+    record = make_record(
         source="codex",
         session_id=session_id,
         session_path=str(path),
@@ -1094,6 +1149,8 @@ def parse_codex(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
         message_count=message_count,
         origin=str(meta.get("source") or meta.get("originator") or "Codex session"),
     )
+    record["truncated_turns"] = truncated_turns
+    return record
 
 
 def parse_claude(
@@ -1102,7 +1159,7 @@ def parse_claude(
     desktop_sessions: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any] | None:
     prompts: list[str] = []
-    total_chars = 0
+    truncated_turns = 0
     created = ""
     updated = ""
     cwd = ""
@@ -1126,9 +1183,11 @@ def parse_claude(
         if row.get("type") == "user" and not row.get("isSidechain"):
             message = row.get("message", {})
             text = text_from_content(message.get("content") if isinstance(message, dict) else message)
-            if text and total_chars < max_prompt_chars:
-                prompts.append(text[: max_prompt_chars - total_chars])
-                total_chars += len(text)
+            if text:
+                if len(text) > max_prompt_chars:
+                    text = text[:max_prompt_chars]
+                    truncated_turns += 1
+                prompts.append(text)
                 message_count += 1
         if row.get("type") == "custom-title":
             candidate_title = str(row.get("customTitle") or "").strip()
@@ -1176,6 +1235,7 @@ def parse_claude(
         record["desktop_session_id"] = desktop_session_id
         record["desktop_profile"] = str(desktop_metadata.get("desktop_profile") or "")
     record["title_source"] = title_source
+    record["truncated_turns"] = truncated_turns
     return record
 
 
@@ -1191,11 +1251,11 @@ def parse_kimi(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
     prompts = [title]
     if last_prompt and last_prompt != title:
         prompts.append(last_prompt)
-    prompts = [item[:max_prompt_chars] for item in prompts]
+    prompts, truncated_turns = clip_prompts(prompts, max_prompt_chars)
     cwd = str(state.get("cwd") or state.get("workDir") or "")
     session_id = str(state.get("id") or path.parent.name)
     stat = path.stat()
-    return make_record(
+    record = make_record(
         source="kimi",
         session_id=session_id,
         session_path=str(path),
@@ -1207,6 +1267,8 @@ def parse_kimi(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
         message_count=max(1, len(prompts)),
         origin="Kimi Code",
     )
+    record["truncated_turns"] = truncated_turns
+    return record
 
 
 def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | None:
@@ -1224,7 +1286,7 @@ def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | No
     prompts = [title]
     if last_prompt and last_prompt != title:
         prompts.append(last_prompt)
-    prompts = [item[:max_prompt_chars] for item in prompts]
+    prompts, truncated_turns = clip_prompts(prompts, max_prompt_chars)
     cwd = str(state.get("cwd") or state.get("workDir") or "")
     session_id = str(state.get("id") or session_folder)
     stat = path.stat()
@@ -1240,6 +1302,7 @@ def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | No
         message_count=max(1, len(prompts)),
         origin="Kimi Desktop / Work",
     )
+    record["truncated_turns"] = truncated_turns
     record["open_label"] = "Open Kimi Desktop ↗"
     return record
 
@@ -1320,7 +1383,7 @@ def build_index_now() -> dict[str, Any]:
     config = load_config()
     global NAMING_RULES
     NAMING_RULES = resolve_naming_rules(config)
-    max_chars = int(config.get("max_prompt_chars", 9000))
+    max_chars = int(config.get("max_prompt_chars", MAX_TURN_CHARS))
     source_paths = resolved_source_paths(config)
     claude_desktop_sessions = load_claude_desktop_session_map(all_profiles=True)
     records: list[dict[str, Any]] = []
@@ -1375,6 +1438,14 @@ def build_index_now() -> dict[str, Any]:
                     }
                     if record:
                         records.append(record)
+                        # Say when a turn was clipped. Silent truncation is what
+                        # made the missing text so hard to notice.
+                        clipped = int(record.get("truncated_turns") or 0)
+                        if clipped:
+                            notices.append(
+                                f"{source}: {path.name}: {clipped} turn(s) truncated "
+                                f"at {max_chars} characters"
+                            )
                 except Exception as exc:  # one damaged session must not block the index
                     errors.append(f"{source}: {path.name}: {type(exc).__name__}")
     store_parse_cache(fresh_cache, max_chars)
@@ -1572,14 +1643,45 @@ class FinderHandler(SimpleHTTPRequestHandler):
             return False
         return True
 
+    def client_accepts_gzip(self) -> bool:
+        """Honour the quality values, so q=0 reads as a refusal rather than a yes."""
+        for token in str(self.headers.get("Accept-Encoding") or "").lower().split(","):
+            name, _, parameters = token.strip().partition(";")
+            if name.strip() not in {"gzip", "x-gzip"}:
+                continue
+            quality = ""
+            for parameter in parameters.split(";"):
+                key, _, value = parameter.partition("=")
+                if key.strip() == "q":
+                    quality = value.strip()
+            if not quality:
+                return True
+            try:
+                return float(quality) > 0
+            except ValueError:
+                return True
+        return False
+
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        encoding = ""
+        # The index carries every request a person typed, so it compresses well.
+        # Small replies are left alone: framing one costs more than it saves.
+        if len(body) >= GZIP_MIN_BYTES and self.client_accepts_gzip():
+            compressed = compressed_index_body(body)
+            if compressed is not None and len(compressed) < len(body):
+                body = compressed
+                encoding = "gzip"
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def do_OPTIONS(self) -> None:
         # No CORS headers: a cross-origin preflight must fail rather than pass.
