@@ -21,6 +21,8 @@ synthetic or privacy-safe visual verification.
 ## Stack and structure
 
 - `app.py`: Python standard-library server, original adapters, indexer, and open actions.
+- `search_index.py`: local normalized substring search, revision-scoped result cache, paged summaries and text.
+- `/api/index` returns metadata only; `/api/search` and `/api/record` return bounded pages. Revisions reject stale pages.
 - `desktop_sources.py`: read-only desktop/Harness adapters; `vendor/chromium/` is a pinned MIT IndexedDB decoder subset.
 - Harness `.zstd` needs Python 3.14 stdlib, optional `zstandard`, or a `zstd` CLI.
 - Source tests must disable all unneeded adapters, including future ones; never scan real user histories in a unit test.
@@ -47,12 +49,12 @@ synthetic or privacy-safe visual verification.
 
 ## Current state
 
-The current public release is v1.3.0: English and Simplified Chinese editions
+The current public release is v1.4.0: English and Simplified Chinese editions
 for macOS and Windows. `APP_VERSION` in `app.py` is the single source for the
 release number; the README status lines and download links must agree with it,
 and `VersionConsistencyTest` fails when they drift.
 
-The working tree includes an unreleased September source expansion on top of
-GitHub main `616fe07` (merged PR #12). Do not describe the existing v1.3.0
-downloads as containing these changes. New macOS sources are live-verified;
-Windows source discovery is synthetic-test coverage only.
+v1.4.0 includes the September source expansion, PR #12's full-prompt recall,
+and local server search with paged result snippets and on-demand indexed text.
+New macOS sources are live-verified; Windows source discovery has synthetic-test
+coverage only. The local service still retains the full saved index in memory.

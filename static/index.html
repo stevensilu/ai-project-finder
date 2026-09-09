@@ -243,6 +243,10 @@
     .field label { display: block; margin-bottom: 6px; color: var(--dim); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
     .field input, .field textarea, .field select { width: 100%; border: 0; border-bottom: 1px solid var(--ink); background: transparent; padding: 10px 0; border-radius: 0; }
     .field textarea { min-height: 92px; resize: vertical; }
+    #textContent { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.8; }
+    #textHeading { overflow-wrap: anywhere; }
+    #textPosition { color: var(--dim); font-size: 10px; }
+    .form-button:disabled { opacity: .4; cursor: default; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
     .form-button { border: 1px solid var(--ink); background: transparent; padding: 9px 14px; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
     .form-button.primary { background: var(--ink); color: var(--bg); }
@@ -390,7 +394,7 @@
       </div>
     </section>
 
-    <footer><span data-i18n="footerLocal">AI Project Finder / local only</span><span data-i18n="footerSources">Codex · Claude · Kimi · WorkBuddy · Qwen · Doubao · DeepSeek · Manual</span></footer>
+    <footer><span><span data-i18n="footerLocal">AI Project Finder / local only</span> · <span id="appVersion"></span></span><span data-i18n="footerSources">Codex · Claude · Kimi · WorkBuddy · Qwen · Doubao · DeepSeek · Manual</span></footer>
   </main>
 
   <div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
@@ -408,6 +412,14 @@
       </div>
       <div class="modal-actions"><button class="form-button" id="cancelModal" type="button" data-i18n="cancel">Cancel</button><button class="form-button primary" type="submit" data-i18n="saveTrace">Save trace</button></div>
     </form>
+  </div>
+  <div class="modal-backdrop" id="textBackdrop" role="dialog" aria-modal="true" aria-labelledby="textHeading">
+    <div class="modal">
+      <div class="modal-head"><div><h2 id="textHeading" data-i18n="textTitle">Indexed user requests</h2><p data-i18n="textHint">Text retained by the local index.</p></div><button class="form-button" type="button" id="closeText" data-i18n="close">Close</button></div>
+      <div id="textPosition" aria-live="polite"></div>
+      <pre id="textContent"></pre>
+      <div class="modal-actions"><button class="form-button" id="textStart" type="button" data-i18n="fromStart">From start</button><button class="form-button" id="textPrevious" type="button" data-i18n="previousPage">Previous</button><button class="form-button primary" id="textNext" type="button" data-i18n="nextPage">Next</button></div>
+    </div>
   </div>
   <div class="modal-backdrop" id="assignBackdrop" role="dialog" aria-modal="true" aria-labelledby="assignTitle">
     <form class="modal" id="assignForm">
@@ -440,6 +452,7 @@
     const LOCALE = window.__APF_LOCALE__ === "zh-CN" ? "zh-CN" : "en";
     const COPY = {
       en: {
+        viewText: "View indexed text", textTitle: "Indexed user requests", textHint: "Text retained by the local index. Open the original session for the full conversation.", previousPage: "Previous", nextPage: "Next", fromStart: "From start", textPosition: "Characters {start}–{end} / {total}", searchFailed: "Search failed · try again",
         diagnostics: "Source status", ready: "Ready", empty: "Detected, no user sessions", missing: "Not detected", disabled: "Disabled", error: "Read failed", cached: "Locally cached conversations only",
         openApp: "Open {tool} ↗", copyTitle: "Copy title", titleCopied: "TITLE COPIED", appOpenHint: "Opens the app; use the copied title to find this session.",
         pageTitle: "AI Project Finder · Local Project Index",
@@ -503,6 +516,7 @@
         projectRenamed: "PROJECT RENAMED", assignFailed: "ASSIGNMENT NOT SAVED"
       },
       "zh-CN": {
+        viewText: "查看已索引内容", textTitle: "已索引的用户请求", textHint: "这里展示本地索引保留的文本。完整对话可通过打开原会话查看。", previousPage: "上一段", nextPage: "下一段", fromStart: "从开头查看", textPosition: "第 {start}–{end} 字符 / 共 {total}", searchFailed: "搜索失败，请重试",
         diagnostics: "来源状态", ready: "可读取", empty: "已检测到，暂无用户会话", missing: "未检测到", disabled: "已停用", error: "读取失败", cached: "仅覆盖本机已缓存的对话",
         openApp: "打开 {tool} ↗", copyTitle: "复制标题", titleCopied: "已复制标题", appOpenHint: "打开客户端后，可用复制的标题查找这条会话。",
         pageTitle: "AI Project Finder · 本地项目索引",
@@ -587,12 +601,13 @@
       });
       root.classList.remove("locale-init");
     };
-    const PAGE_SIZE = 160;
-    const PROJECT_LINE_LIMIT = 5;
+    const PAGE_SIZE = 30;
     const state = {
       records: [], summary: {}, generatedAt: null, query: "", sources: new Set(),
       view: "sessions", range: "all", sort: "relevance", demo: false, locale: LOCALE,
-      sourceStatus: {}, warnings: [], limit: PAGE_SIZE, editingTraceId: "", assigning: null
+      sourceStatus: {}, warnings: [], groups: [], knownProjects: [], revision: "",
+      total: 0, totalRecords: 0, totalProjects: 0, nextOffset: null, busy: false,
+      editingTraceId: "", assigning: null
     };
     const labels = { workbuddy: "WorkBuddy", qwenwork: LOCALE === "zh-CN" ? "千问办公" : "Qwen Work", "doubao-work": LOCALE === "zh-CN" ? "豆包工作" : "Doubao Work", "deepseek-harness": "DeepSeek Harness", codex: "Codex", claude: "Claude", kimi: "Kimi Code", "kimi-desktop": "Kimi Desktop", other: copy.other };
     const root = document.documentElement;
@@ -786,81 +801,6 @@
       return output + escapeHtml(raw.slice(cursor));
     }
 
-    // Normalizing every excerpt on each keystroke was the slowest part of
-    // typing, so each record folds its text once and keeps it.
-    function recordSearchText(record) {
-      if (record._search === undefined) {
-        record._search = normalize([
-          record.title, record.project, record.customer, record.cwd,
-          record.excerpt, record.notes, ...(record.artifacts || [])
-        ].filter(Boolean).join(" "));
-      }
-      return record._search;
-    }
-
-    function projectRecordSearchText(record) {
-      if (record._projectSearch === undefined) {
-        record._projectSearch = normalize([
-          record.project, record.customer, record.title, record.cwd,
-          ...(record.artifacts || [])
-        ].filter(Boolean).join(" "));
-      }
-      return record._projectSearch;
-    }
-
-    function matchesSourceFilter(record, sources) {
-      if (!sources.length) return true;
-      const haystack = normalize(`${record.source || ""} ${record.source_label || ""}`);
-      return sources.some((value) => haystack.includes(value));
-    }
-
-    function recencyWeight(value) {
-      const time = new Date(value).getTime();
-      if (Number.isNaN(time)) return 1;
-      const days = (Date.now() - time) / 86400000;
-      if (days <= 30) return 1.3;
-      if (days <= 90) return 1.15;
-      if (days <= 365) return 1;
-      return 0.9;
-    }
-
-    // How often a term appears in the request text, damped and capped. Without
-    // this every conversation-text match scored the same flat base and the whole
-    // group tied at the bottom. The cap keeps it a tiebreaker: a long session
-    // that says a word often must not outrank a session named after it.
-    // Counting stops here, which is also what bounds the score: 1 + log(64) is
-    // about 5.2, comfortably under the 18 a project or title match adds.
-    const BODY_TERM_LIMIT = 64;
-    function bodyTermScore(record, token) {
-      if (!token) return 0;
-      const haystack = recordSearchText(record);
-      let count = 0;
-      let from = haystack.indexOf(token);
-      while (from >= 0 && count < BODY_TERM_LIMIT) {
-        count += 1;
-        from = haystack.indexOf(token, from + token.length);
-      }
-      return count ? 1 + Math.log(count) : 0;
-    }
-
-    function scoreRecord(record, tokens) {
-      if (!tokens.length) return 0;
-      const title = normalize(record.title);
-      const project = normalize(record.project);
-      const customer = normalize(record.customer);
-      const cwd = normalize(record.cwd);
-      const base = tokens.reduce((score, token) => {
-        let value = 2;
-        if (project.includes(token)) value += 18;
-        if (customer.includes(token)) value += 18;
-        const titleAt = title.indexOf(token);
-        if (titleAt >= 0) value += titleAt < 20 ? 18 : 12;
-        if (cwd.includes(token)) value += 8;
-        return score + value + bodyTermScore(record, token);
-      }, 0);
-      return base * recencyWeight(record.updated_at);
-    }
-
     // A record now holds the whole request history, so every path out of here
     // has to be bounded. The card shows two clamped lines; handing the browser a
     // 250 KB string to hide costs layout and buys nothing.
@@ -879,27 +819,6 @@
       const start = Math.max(0, at - 120);
       const end = Math.min(raw.length, start + 820);
       return `${start > 0 ? "…" : ""}${raw.slice(start, end)}${end < raw.length ? "…" : ""}`;
-    }
-
-    function filteredRecords() {
-      const {terms, sources} = parseQuery(state.query);
-      const cutoff = state.range === "all" ? 0 : Date.now() - Number(state.range) * 86400000;
-      const scores = new Map();
-      const rows = state.records.filter((record) => {
-        if (state.sources.size && !state.sources.has(record.source)) return false;
-        if (!matchesSourceFilter(record, sources)) return false;
-        if (cutoff && new Date(record.updated_at).getTime() < cutoff) return false;
-        const haystack = state.view === "projects"
-          ? projectRecordSearchText(record)
-          : recordSearchText(record);
-        if (!terms.every((term) => haystack.includes(term))) return false;
-        scores.set(record, scoreRecord(record, terms));
-        return true;
-      });
-      if (state.sort === "oldest") rows.sort((a,b) => String(a.updated_at).localeCompare(String(b.updated_at)));
-      else if (state.sort === "recent" || !terms.length) rows.sort((a,b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-      else rows.sort((a,b) => (scores.get(b) || 0) - (scores.get(a) || 0) || String(b.updated_at).localeCompare(String(a.updated_at)));
-      return rows;
     }
 
     function badge(record) {
@@ -937,46 +856,25 @@
         <div class="path-row"><span class="path-label">${copy.workspace}</span><span class="path" title="${escapeHtml(location)}">${highlight(location, state.query)}</span><button class="copy" type="button" data-copy="${encodeURIComponent(location)}">${copy.copyPath}</button></div>
         ${excerpt ? `<div class="excerpt">${highlight(excerpt, state.query)}</div>` : ""}
         ${artifacts ? `<div class="artifact-list">${artifacts}</div>` : ""}
-        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(displayOrigin(record))}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${record.open_scope === "app" ? `<button class="copy" type="button" data-copy-title="${recordId}" title="${copy.appOpenHint}">${copy.copyTitle}</button>` : ""}${assignButton}${manualButtons}${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
+        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(displayOrigin(record))}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${record.open_scope === "app" ? `<button class="copy" type="button" data-copy-title="${recordId}" title="${copy.appOpenHint}">${copy.copyTitle}</button>` : ""}${record.excerpt_length ? `<button class="action-button" type="button" data-view-text="${recordId}">${copy.viewText}</button>` : ""}${assignButton}${manualButtons}${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
       </article>`;
     }
 
-    function projectCards(records) {
-      const groups = new Map();
-      records.forEach((record) => {
-        const key = record.project || copy.unclassifiedProject;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(record);
-      });
-      const unclassified = copy.unclassifiedProject;
-      return [...groups.entries()].sort((a, b) => {
-        if ((a[0] === unclassified) !== (b[0] === unclassified)) return a[0] === unclassified ? 1 : -1;
-        return String(b[1][0].updated_at).localeCompare(String(a[1][0].updated_at));
-      }).slice(0, state.limit).map(([project, rows], index) => {
-        const sources = [...new Set(rows.map((row) => row.source))];
-        const workspaces = [...new Set(rows.map((row) => row.cwd).filter(Boolean))];
-        const sourceBadges = sources.map((source) => badge({source, source_label: labels[source] || source})).join("");
-        const lines = rows.map((row, position) => {
-          const recordId = escapeHtml(row.id || "");
-          const lineOpenLabel = openLabelFor(row);
-          const hidden = position >= PROJECT_LINE_LIMIT ? " extra" : "";
-          return `<div class="session-line${hidden}" data-open-record-id="${recordId}">${badge(row)}<div class="session-line-title" title="${escapeHtml(displayTitle(row))}">${highlight(displayTitle(row), state.query)}</div><time class="date">${relativeDate(row.updated_at)}</time><button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: displayTitle(row)}))}">${escapeHtml(lineOpenLabel)}</button></div>`;
-        }).join("");
-        const remaining = Math.max(0, rows.length - PROJECT_LINE_LIMIT);
-        const moreButton = remaining
-          ? `<button class="session-more" type="button" data-expand-project="1" aria-expanded="false">${formatCopy("moreTraces", {count: remaining})}</button>`
-          : "";
-        const latestId = escapeHtml(rows[0].id || "");
-        const workspaceButton = workspaces.length ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${latestId}">${copy.openWorkspace}</button>` : "";
-        const renameButton = project === copy.unclassifiedProject
-          ? ""
-          : `<button class="action-button" type="button" data-rename-project="${escapeHtml(project)}">${copy.rename}</button>`;
-        const projectSummary = [
-          formatCopy("traces", {count: rows.length}),
-          formatCopy("workspaces", {count: workspaces.length}),
-          formatCopy("latest", {date: relativeDate(rows[0].updated_at)})
-        ].join(" / ");
-        return `<article class="result-card project-card tech-reveal"><div class="project-head"><span class="record-no">${String(index + 1).padStart(3, "0")}</span><div><h4>${highlight(project, state.query)}</h4><div class="project-summary">${projectSummary}</div></div><div class="project-side"><div class="source-stack">${sourceBadges}</div>${renameButton}${workspaceButton}</div></div><div class="session-lines">${lines}${moreButton}</div></article>`;
+    function projectLine(row) {
+      const id = escapeHtml(row.id || "");
+      return `<div class="session-line" data-open-record-id="${id}">${badge(row)}<div class="session-line-title" title="${escapeHtml(displayTitle(row))}">${highlight(displayTitle(row), state.query)}</div><time class="date">${relativeDate(row.updated_at)}</time><button class="action-button primary" type="button" data-open-action="session" data-record-id="${id}" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: displayTitle(row)}))}">${escapeHtml(openLabelFor(row))}</button></div>`;
+    }
+
+    function projectCards(groups) {
+      return groups.map((group, index) => {
+        const project = group.project || copy.unclassifiedProject;
+        const sourceBadges = group.sources.map(source => badge({source, source_label: labels[source] || source})).join("");
+        const remaining = group.total - group.records.length;
+        const more = remaining > 0 ? `<button class="session-more" type="button" data-expand-project="${escapeHtml(group.project)}">${formatCopy("showMore", {count: Math.min(PAGE_SIZE, remaining)})}</button>` : "";
+        const workspace = group.workspace_id ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${escapeHtml(group.workspace_id)}">${copy.openWorkspace}</button>` : "";
+        const rename = group.project ? `<button class="action-button" type="button" data-rename-project="${escapeHtml(group.project)}">${copy.rename}</button>` : "";
+        const summary = [formatCopy("traces", {count: group.total}), formatCopy("workspaces", {count: group.workspace_count}), formatCopy("latest", {date: relativeDate(group.updated_at)})].join(" / ");
+        return `<article class="result-card project-card tech-reveal"><div class="project-head"><span class="record-no">${String(index + 1).padStart(3, "0")}</span><div><h4>${highlight(project, state.query)}</h4><div class="project-summary">${summary}</div></div><div class="project-side"><div class="source-stack">${sourceBadges}</div>${rename}${workspace}</div></div><div class="session-lines">${group.records.map(projectLine).join("")}${more}</div></article>`;
       }).join("");
     }
 
@@ -989,31 +887,18 @@
     }
 
     function render() {
-      const records = filteredRecords();
-      const projectCount = new Set(records.map((record) => displayProject(record))).size;
       $("#resultsTitle").textContent = state.query ? formatCopy("traceHeading", {query: state.query}) : copy.recentTracesUpper;
       const summary = state.view === "sessions"
-        ? formatCopy("sessionMeta", {sessions: records.length, projects: projectCount})
-        : formatCopy("projectMeta", {projects: projectCount, traces: records.length});
-      const total = state.view === "sessions" ? records.length : projectCount;
-      const shown = Math.min(state.limit, total);
-      // Say when the list is cut short rather than letting it look complete.
-      $("#resultsMeta").textContent = shown < total
-        ? `${summary} / ${formatCopy("showingOf", {shown, total})}`
-        : summary;
-      if (!records.length) {
+        ? formatCopy("sessionMeta", {sessions: state.totalRecords, projects: state.totalProjects})
+        : formatCopy("projectMeta", {projects: state.totalProjects, traces: state.totalRecords});
+      const shown = state.view === "sessions" ? state.records.length : state.groups.length;
+      $("#resultsMeta").textContent = shown < state.total ? `${summary} / ${formatCopy("showingOf", {shown, total: state.total})}` : summary;
+      if (!state.total) {
         $("#resultList").innerHTML = `<div class="empty"><div><strong>${copy.noMatch}</strong><span>${copy.noMatchHelp}</span></div></div>`;
         return;
       }
-      if (state.view === "sessions") {
-        const remaining = records.length - shown;
-        const moreButton = remaining > 0
-          ? `<button class="show-more" type="button" id="showMore">${formatCopy("showMore", {count: remaining})}</button>`
-          : "";
-        $("#resultList").innerHTML = records.slice(0, shown).map(recordCard).join("") + moreButton;
-      } else {
-        $("#resultList").innerHTML = projectCards(records) + (shown < total ? `<button class="show-more" type="button" id="showMore">${formatCopy("showMore", {count: total - shown})}</button>` : "");
-      }
+      const more = state.nextOffset !== null ? `<button class="show-more" type="button" id="showMore">${formatCopy("showMore", {count: Math.min(PAGE_SIZE, state.total - shown)})}</button>` : "";
+      $("#resultList").innerHTML = (state.view === "sessions" ? state.records.map(recordCard).join("") : projectCards(state.groups)) + more;
       revealDynamic();
     }
 
@@ -1071,26 +956,152 @@
       return error;
     }
 
-    async function loadIndex() {
-      const response = await fetch("/api/index", {cache: "no-store"});
+    let searchController = null;
+    let searchGeneration = 0;
+    let indexGeneration = 0;
+    function invalidateSearch() {
+      searchGeneration += 1;
+      searchController?.abort();
+      state.busy = false;
+    }
+    async function apiJSON(path, options = {}) {
+      const response = await fetch(path, {cache: "no-store", ...options});
       if (response.status === 403) {
-        if (reloadForNewSession()) return;
+        reloadForNewSession();
         throw unauthorizedError();
       }
-      if (!response.ok) throw new Error("index unavailable");
-      clearReauthFlag();
       const payload = await response.json();
-      state.records = payload.records || [];
+      if (!response.ok) {
+        const error = new Error(payload.error || copy.searchFailed);
+        error.code = payload.error_code;
+        throw error;
+      }
+      clearReauthFlag();
+      return payload;
+    }
+    function searchParams(offset = 0) {
+      return new URLSearchParams({q: state.query, source: [...state.sources].join(","), view: state.view,
+        range: state.range, sort: state.sort, offset, limit: PAGE_SIZE, revision: state.revision});
+    }
+    async function handleReadError(error) {
+      if (error.name === "AbortError") return;
+      if (error.code === "stale_index") {
+        closeText();
+        await loadIndex().catch(() => toast(copy.searchFailed));
+        toast(copy.indexRefreshed);
+      } else {
+        toast(error.code === "unauthorized" ? copy.localSessionExpired : copy.searchFailed);
+      }
+    }
+    async function loadResults(append = false) {
+      invalidateSearch();
+      const generation = searchGeneration;
+      searchController = new AbortController();
+      state.busy = true;
+      $("#resultList").setAttribute("aria-busy", "true");
+      if (!append) {
+        state.records = []; state.groups = [];
+        $("#resultsMeta").textContent = copy.readingIndex;
+        $("#resultList").innerHTML = `<div class="empty">${copy.readingIndex}</div>`;
+      } else if ($("#showMore")) $("#showMore").disabled = true;
+      try {
+        const payload = await apiJSON(`/api/search?${searchParams(append ? state.nextOffset : 0)}`, {signal: searchController.signal});
+        if (generation !== searchGeneration) return false;
+        state.groups = append ? [...state.groups, ...(payload.groups || [])] : payload.groups || [];
+        state.records = state.view === "projects" ? state.groups.flatMap(group => group.records)
+          : append ? [...state.records, ...payload.records] : payload.records;
+        state.total = payload.total; state.totalRecords = payload.total_records; state.totalProjects = payload.total_projects;
+        state.nextOffset = payload.next_offset;
+        render();
+        return true;
+      } catch (error) {
+        if (generation !== searchGeneration) return false;
+        if (!append) $("#resultList").innerHTML = `<div class="empty">${copy.searchFailed}</div>`;
+        $("#resultsMeta").textContent = copy.searchFailed;
+        await handleReadError(error);
+        return false;
+      } finally {
+        if (generation === searchGeneration) {
+          state.busy = false;
+          $("#resultList").setAttribute("aria-busy", "false");
+          if ($("#showMore")) $("#showMore").disabled = false;
+        }
+      }
+    }
+    async function loadIndex() {
+      const generation = ++indexGeneration;
+      invalidateSearch();
+      const payload = await apiJSON("/api/index");
+      if (generation !== indexGeneration) return;
       state.summary = payload.summary || {};
+      state.knownProjects = payload.projects || [];
       state.sourceStatus = payload.source_status || {};
       state.warnings = payload.warnings || [];
       state.generatedAt = payload.generated_at;
+      state.revision = payload.revision;
+      $("#appVersion").textContent = `v${payload.version}`;
       state.demo = Boolean(payload.demo);
       $("#demoBadge").hidden = !state.demo;
       $("#addButton").hidden = state.demo;
       document.body.dataset.demo = state.demo ? "true" : "false";
-      renderSources(); renderDiagnostics(); renderStats(); render();
+      renderSources(); renderDiagnostics(); renderStats();
+      await loadResults();
       if (hasGsap) window.ScrollTrigger.refresh();
+    }
+    async function expandProject(button) {
+      const group = state.groups.find(item => item.project === button.dataset.expandProject);
+      if (!group || button.disabled) return;
+      const generation = searchGeneration;
+      const params = searchParams(group.records.length);
+      params.set("view", "sessions"); params.set("project", group.project);
+      button.disabled = true;
+      try {
+        const payload = await apiJSON(`/api/search?${params}`);
+        if (generation !== searchGeneration) return;
+        group.records.push(...payload.records);
+        state.records = state.groups.flatMap(item => item.records);
+        button.insertAdjacentHTML("beforebegin", payload.records.map(projectLine).join(""));
+        if (payload.next_offset === null) button.remove();
+        else button.textContent = formatCopy("showMore", {count: Math.min(PAGE_SIZE, group.total - group.records.length)});
+      } catch (error) { if (generation === searchGeneration) await handleReadError(error); }
+      finally { button.disabled = false; }
+    }
+
+    let textRecordId = "";
+    let textOffset = 0;
+    let textNextOffset = null;
+    let textGeneration = 0;
+    async function showText(recordId, offset = 0) {
+      const generation = ++textGeneration;
+      if (!$("#textBackdrop").classList.contains("open")) lastFocusedElement = document.activeElement;
+      textRecordId = recordId;
+      $("#textBackdrop").classList.add("open");
+      $("#textContent").textContent = copy.readingIndex;
+      $("#textPosition").textContent = "";
+      ["#textPrevious", "#textNext", "#textStart"].forEach(id => $(id).disabled = true);
+      $("#closeText").focus();
+      try {
+        const payload = await apiJSON(`/api/record?${new URLSearchParams({id: recordId, offset, revision: state.revision})}`);
+        if (generation !== textGeneration) return;
+        textOffset = payload.offset; textNextOffset = payload.next_offset;
+        $("#textHeading").textContent = displayTitle(payload.record);
+        $("#textContent").innerHTML = highlight(payload.text, state.query);
+        $("#textPosition").textContent = formatCopy("textPosition", {start: payload.total_chars ? payload.offset + 1 : 0, end: Math.min(payload.offset + 12000, payload.total_chars), total: payload.total_chars});
+        $("#textPrevious").disabled = textOffset === 0;
+        $("#textStart").disabled = textOffset === 0;
+        $("#textNext").disabled = textNextOffset === null;
+      } catch (error) {
+        if (generation !== textGeneration) return;
+        $("#textContent").textContent = copy.searchFailed;
+        await handleReadError(error);
+      }
+    }
+    function closeText() {
+      textGeneration += 1;
+      const wasOpen = $("#textBackdrop").classList.contains("open");
+      $("#textBackdrop").classList.remove("open");
+      if (wasOpen && lastFocusedElement && document.contains(lastFocusedElement)) lastFocusedElement.focus();
+      if (wasOpen) lastFocusedElement = null;
     }
 
     async function refreshIndex() {
@@ -1158,7 +1169,7 @@
       state.assigning = record
         ? {mode: "record", recordId: record.id || "", hasWorkspace: Boolean(record.cwd), scope: "record"}
         : {mode: "project", project: projectName, scope: "record"};
-      const known = [...new Set(state.records.map((item) => item.project).filter(Boolean))].sort();
+      const known = state.knownProjects;
       $("#knownProjects").innerHTML = known.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
       $("#assignTitle").textContent = record ? copy.assignProject : copy.renameProject;
       $("#assignHint").textContent = record
@@ -1215,7 +1226,7 @@
       lastFocusedElement = null;
     }
     function trapModalFocus(event) {
-      if (event.key !== "Tab" || !$("#modalBackdrop").classList.contains("open")) return;
+      if (event.key !== "Tab" || !openDialog()) return;
       const fields = focusableModalFields();
       if (!fields.length) return;
       const first = fields[0];
@@ -1230,13 +1241,11 @@
         target.scrollIntoView({behavior: reduce ? "auto" : "smooth", block: "start"});
       });
     }
-    function submitSearch() {
+    async function submitSearch() {
       window.clearTimeout(searchTimer);
-      state.limit = PAGE_SIZE;
       state.query = $("#search").value.trim();
-      render();
       syncUrl();
-      scrollToFirstResult();
+      if (await loadResults()) scrollToFirstResult();
     }
     async function openRecord(recordId, action = "session", button = null) {
       const original = button?.textContent || "";
@@ -1285,9 +1294,10 @@
     }
 
     let searchTimer;
-    function applyFilterChange() { window.clearTimeout(searchTimer); state.limit = PAGE_SIZE; render(); syncUrl(); }
+    function applyFilterChange() { window.clearTimeout(searchTimer); syncUrl(); loadResults(); }
     $("#search").addEventListener("input", (event) => {
       state.query = event.target.value.trim();
+      invalidateSearch();
       window.clearTimeout(searchTimer);
       if (!event.isComposing) searchTimer = window.setTimeout(applyFilterChange, 140);
     });
@@ -1326,18 +1336,15 @@
         return;
       }
       if (event.target.closest("#showMore")) {
-        state.limit += PAGE_SIZE;
-        render();
+        if (!state.busy && state.nextOffset !== null) await loadResults(true);
         return;
       }
       const expandButton = event.target.closest("[data-expand-project]");
-      if (expandButton) {
-        const lines = expandButton.closest(".session-lines");
-        const expanded = lines.classList.toggle("expanded");
-        expandButton.setAttribute("aria-expanded", expanded ? "true" : "false");
-        expandButton.textContent = expanded
-          ? copy.showLess
-          : formatCopy("moreTraces", {count: lines.querySelectorAll(".session-line.extra").length});
+      if (expandButton) { await expandProject(expandButton); return; }
+      const textButton = event.target.closest("[data-view-text]");
+      if (textButton) {
+        const record = state.records.find(row => row.id === textButton.dataset.viewText);
+        if (record) await showText(record.id, record.excerpt_offset || 0);
         return;
       }
       const assignButtonEl = event.target.closest("[data-assign-record]");
@@ -1354,7 +1361,12 @@
       const editButton = event.target.closest("[data-manual-edit]");
       if (editButton) {
         const record = state.records.find((item) => String(item.manual_id || "") === editButton.dataset.manualEdit);
-        if (record) openModal(record);
+        if (record) {
+          try {
+            const payload = await apiJSON(`/api/record?${new URLSearchParams({id: record.id, edit: "1", revision: state.revision})}`);
+            openModal(payload.record);
+          } catch (error) { await handleReadError(error); }
+        }
         return;
       }
       const deleteButton = event.target.closest("[data-manual-delete]");
@@ -1373,6 +1385,11 @@
     });
     $("#refreshButton").addEventListener("click", refreshIndex);
     $("#addButton").addEventListener("click", () => openModal());
+    $("#closeText").addEventListener("click", closeText);
+    $("#textBackdrop").addEventListener("click", event => { if (event.target === $("#textBackdrop")) closeText(); });
+    $("#textPrevious").addEventListener("click", () => showText(textRecordId, Math.max(0, textOffset - 12000)));
+    $("#textNext").addEventListener("click", () => { if (textNextOffset !== null) showText(textRecordId, textNextOffset); });
+    $("#textStart").addEventListener("click", () => showText(textRecordId, 0));
     $("#closeModal").addEventListener("click", closeModal);
     $("#closeAssign").addEventListener("click", closeAssign);
     $("#cancelAssign").addEventListener("click", closeAssign);
@@ -1431,7 +1448,7 @@
 
     document.addEventListener("keydown", (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("#search").focus(); }
-      if (event.key === "Escape") { closeModal(); closeAssign(); }
+      if (event.key === "Escape") { if ($("#textBackdrop").classList.contains("open")) closeText(); else if ($("#assignBackdrop").classList.contains("open")) closeAssign(); else closeModal(); }
       trapModalFocus(event);
     });
 

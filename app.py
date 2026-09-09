@@ -29,12 +29,13 @@ from typing import Any, Iterable
 from urllib.parse import parse_qs, quote, urlparse
 
 import desktop_sources
+from search_index import SearchIndex
 
 
 # One place to state the release. README badges, the packaged archives, and the
 # Server header all read from here, which is how server_version drifted to 1.0
 # while the published releases were on 1.2.0.
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
@@ -147,6 +148,8 @@ NAMING_RULES: dict[str, list[str]] = {
 # refresh off the full-rescan path.
 INDEX_CACHE: dict[str, Any] = {"key": None, "payload": None}
 INDEX_CACHE_LOCK = threading.Lock()
+SEARCH_CACHE: dict[str, Any] = {"key": None, "index": None}
+SEARCH_CACHE_LOCK = threading.Lock()
 # The compressed copy of the last body sent, so repeat reads skip the work.
 GZIP_CACHE: dict[str, Any] = {"raw": None, "gzip": None}
 GZIP_CACHE_LOCK = threading.Lock()
@@ -435,6 +438,23 @@ def load_index_payload() -> dict[str, Any]:
         INDEX_CACHE["key"] = key
         INDEX_CACHE["payload"] = payload
     return payload
+
+
+def load_search_index() -> SearchIndex:
+    # Demo dates are relative to now. Pin one fixture generation so consecutive
+    # pages share a revision, without changing the fixture loader's public use.
+    if DEMO_MODE:
+        stat = DEMO_FIXTURE_FILE.stat()
+        key = ("demo", str(DEMO_FIXTURE_FILE), stat.st_mtime_ns, APP_LOCALE)
+        payload = None
+    else:
+        payload = load_index_payload()
+        key = ("live", id(payload))
+    with SEARCH_CACHE_LOCK:
+        if SEARCH_CACHE["key"] != key:
+            SEARCH_CACHE["index"] = SearchIndex(payload if payload is not None else load_demo_payload())
+            SEARCH_CACHE["key"] = key
+        return SEARCH_CACHE["index"]
 
 
 def find_indexed_record(record_id: str) -> dict[str, Any] | None:
@@ -1752,8 +1772,7 @@ class FinderHandler(SimpleHTTPRequestHandler):
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         encoding = ""
-        # The index carries every request a person typed, so it compresses well.
-        # Small replies are left alone: framing one costs more than it saves.
+        # Result pages and text segments compress well. Leave tiny replies alone.
         if len(body) >= GZIP_MIN_BYTES and self.client_accepts_gzip():
             compressed = compressed_index_body(body)
             if compressed is not None and len(compressed) < len(body):
@@ -1766,9 +1785,13 @@ class FinderHandler(SimpleHTTPRequestHandler):
             self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
+        try:
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # Typing can cancel an obsolete search while its response is sent.
+            return
 
     def do_OPTIONS(self) -> None:
         # No CORS headers: a cross-origin preflight must fail rather than pass.
@@ -1798,12 +1821,28 @@ class FinderHandler(SimpleHTTPRequestHandler):
             if not self.api_request_is_allowed():
                 return
             if parsed.path == "/api/index":
-                self.send_json(load_index_payload())
+                self.send_json({**load_search_index().metadata(), "version": APP_VERSION})
+                return
+            if parsed.path in {"/api/search", "/api/record"}:
+                params = {key: values[-1] for key, values in parse_qs(parsed.query, keep_blank_values=True).items()}
+                index = load_search_index()
+                if params.get("revision") and params["revision"] != index.revision:
+                    self.deny(HTTPStatus.CONFLICT, "stale_index", "index changed; reload results")
+                    return
+                try:
+                    result = index.search(params) if parsed.path == "/api/search" else index.detail(params)
+                except ValueError as exc:
+                    self.deny(HTTPStatus.BAD_REQUEST, "invalid_query", str(exc))
+                    return
+                except KeyError:
+                    self.deny(HTTPStatus.NOT_FOUND, "record_missing", "record no longer indexed")
+                    return
+                self.send_json(result)
                 return
             if parsed.path == "/api/health":
                 # generated_at lets an open page notice that the refresh started
                 # at launch has finished, without polling the whole index.
-                payload = load_index_payload()
+                payload = load_search_index().payload
                 self.send_json({
                     "ok": True,
                     "demo": DEMO_MODE,

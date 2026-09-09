@@ -11,10 +11,9 @@
 ![数据](https://img.shields.io/badge/data-local_only-111111)
 ![许可](https://img.shields.io/badge/license-MIT-111111)
 
-> 当前状态：v1.3.0，提供独立的英文版与中文版，均支持 macOS 与 Windows。
+> 当前状态：v1.4.0，提供独立的英文版与中文版，均支持 macOS 与 Windows。
 
 
-> 本地开发更新（尚未发布）：已整合 PR #12，并新增 WorkBuddy、千问办公、豆包工作缓存与 DeepSeek Harness。下面的 v1.3.0 下载包是已发布旧版，不包含这些新增适配器。
 
 ## AI Project Finder 的定位
 
@@ -109,7 +108,7 @@ Python 应用只使用标准库，无需执行 `pip install`。
 
 #### 下载发行版
 
-1. 下载并解压 [AI Project Finder v1.3.0 中文版 macOS 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_ZH_macOS_v1.3.0.zip)。
+1. 下载并解压 [AI Project Finder v1.4.0 中文版 macOS 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.4.0/AI_Project_Finder_ZH_macOS_v1.4.0.zip)。
 2. 将文件夹移动到稳定位置，例如 `~/Applications/AI Project Finder`。
 3. 按住 Control 点击 `install.command`，选择 **打开**，完成首次运行确认。
 4. 应用会在 `http://127.0.0.1:4388` 打开。
@@ -141,7 +140,7 @@ chmod +x install.command start.command
 
 #### 下载发行版
 
-1. 下载并解压 [AI Project Finder v1.3.0 中文版 Windows 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_ZH_Windows_v1.3.0.zip)。
+1. 下载并解压 [AI Project Finder v1.4.0 中文版 Windows 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.4.0/AI_Project_Finder_ZH_Windows_v1.4.0.zip)。
 2. 将文件夹移动到稳定位置，例如 `%LOCALAPPDATA%\Programs\AI Project Finder`。
 3. 双击 `install.bat`。
 4. 应用会在 `http://127.0.0.1:4388` 打开。
@@ -189,6 +188,18 @@ landing page localization
 - 切换**会话**或**项目**。
 - 将更新时间限定为最近 30 天、90 天或一年。
 - 按相关度、最新或最早排序。
+
+### 本地搜索与分页阅读
+
+搜索由这台电脑上的 Python 服务执行。页面先加载概况，每次获取 30 条结果和关键词附近的短片段，不再在打开时下载所有会话正文。项目卡片先显示 5 条匹配会话，点击后继续加载；项目视图也支持搜索已索引的用户请求。
+
+**查看已索引内容**会打开命中位置附近的一段文本，每段最多 12,000 字符，可以前后翻段或从开头查看。内容直接来自索引，无需 AI 生成摘要。仍可打开原会话查看完整对话。编辑手动记录时会单独读取原始备注，保存时不会把短预览写回原记录。
+
+保留中文子串、Unicode 规范化、引号短语、全部查询词、来源与时间筛选、相关度排序。查询最多 4,096 字符。分页与索引版本绑定，刷新或编辑后会重新读取结果，较早发出的请求也不会覆盖较新的搜索结果。
+
+本地接口集成须留意：通过验证的 `GET /api/index` 现在只返回概况，不含 `records`。分页结果使用 `/api/search?q=...&offset=0&limit=30`，正文使用 `/api/record?id=...&offset=0`。搜索每页最多 60 条，正文每段最多 12,000 字符；后续请求携带返回的 `revision`，索引变化时返回 HTTP 409。沿用原有的本地访问保护。
+
+Python 服务仍会在本地内存中保留完整索引，第一次关键词搜索时建立规范化文本缓存。这次限制的是浏览器传输和渲染量，尚未限制索引文件体积或服务内存。持久化磁盘检索可作为后续优化。
 
 ### 打开结果
 
@@ -446,7 +457,7 @@ python3 -m unittest discover -s tests
 采用 MIT 许可证，详见 [LICENSE](LICENSE)。
 
 
-## 新增本地来源（尚未发布）
+## v1.4.0 新增本地来源
 
 | 来源 | macOS 自动发现位置 | 覆盖范围与打开方式 |
 | --- | --- | --- |
