@@ -27,6 +27,7 @@ class AutomaticPathsTest(unittest.TestCase):
                 "claude": "auto",
                 "kimi": "auto",
                 "kimi-desktop": "auto",
+                **{name: "auto" for name in app.desktop_sources.LABELS},
             },
         )
         self.assertEqual(app.DEFAULT_CONFIG["locale"], "en")
@@ -262,11 +263,11 @@ class DemoFixtureTest(unittest.TestCase):
     def test_demo_payload_is_balanced_and_contains_only_synthetic_paths(self) -> None:
         payload = app.load_demo_payload()
         self.assertTrue(payload["demo"])
-        self.assertEqual(payload["summary"]["records"], 20)
+        self.assertEqual(payload["summary"]["records"], 24)
         self.assertEqual(payload["summary"]["projects"], 6)
         self.assertEqual(
             payload["summary"]["sources"],
-            {"claude": 5, "codex": 5, "kimi": 5, "kimi-desktop": 5},
+            {"claude": 5, "codex": 5, "kimi": 5, "kimi-desktop": 5, **{name: 1 for name in app.desktop_sources.LABELS}},
         )
         self.assertTrue(
             all(
@@ -289,7 +290,7 @@ class DemoFixtureTest(unittest.TestCase):
             payload = app.load_index_payload()
             guarded_index.exists.assert_not_called()
         self.assertTrue(payload["demo"])
-        self.assertEqual(len(payload["records"]), 20)
+        self.assertEqual(len(payload["records"]), 24)
 
     def test_chinese_demo_payload_uses_localized_project_content(self) -> None:
         with patch.object(app, "APP_LOCALE", "zh-CN"):
@@ -299,7 +300,7 @@ class DemoFixtureTest(unittest.TestCase):
             for record in payload["records"]
             if record["session_id"].startswith("demo-atlas-")
         ]
-        self.assertEqual(len(atlas), 4)
+        self.assertEqual(len(atlas), 8)
         self.assertTrue(all(record["project"] == "阿特拉斯发布" for record in atlas))
         self.assertTrue(all(str(record["cwd"]).startswith("~/演示工作区/") for record in atlas))
         # The interface builds its own searchable text from these fields, so the
@@ -562,6 +563,7 @@ class PromptRecallTest(unittest.TestCase):
             config = {
                 "max_prompt_chars": 9000,
                 "sources": {
+                    **{name: False for name in app.desktop_sources.LABELS},
                     "codex": str(sessions),
                     "claude": str(root / "absent"),
                     "kimi": str(root / "absent"),
@@ -762,6 +764,7 @@ class IndexBuildTest(unittest.TestCase):
             "max_prompt_chars": 9000,
             "locale": "en",
             "sources": {
+                    **{name: False for name in app.desktop_sources.LABELS},
                 "codex": str(self.sessions),
                 "claude": str(root / "absent"),
                 "kimi": str(root / "absent"),
@@ -1040,6 +1043,7 @@ class ProjectAssignmentTest(unittest.TestCase):
         config = {
             "max_prompt_chars": 9000,
             "sources": {
+                    **{name: False for name in app.desktop_sources.LABELS},
                 "codex": str(self.sessions),
                 "claude": str(root / "absent"),
                 "kimi": str(root / "absent"),
@@ -1142,7 +1146,7 @@ class ManualTraceEndpointTest(unittest.TestCase):
         # An empty mapping falls through to automatic discovery, which reads the
         # real local history: slow, and not this test's business.
         absent_sources = {
-            name: str(root / "absent") for name in ("codex", "claude", "kimi", "kimi-desktop")
+            name: str(root / "absent") for name in app.DEFAULT_CONFIG["sources"]
         }
         for attribute, value in (
             ("load_config", {"sources": absent_sources, "max_prompt_chars": 9000}),
@@ -1314,6 +1318,11 @@ class ExcerptWindowTest(unittest.TestCase):
         return json.loads(completed.stdout)
 
 
+    def test_query_keeps_the_ninth_and_later_terms(self) -> None:
+        result = self.run_node('console.log(JSON.stringify(parseQuery("one two three four five six seven eight ninth tenth")));')
+        self.assertEqual(len(result["terms"]), 10)
+        self.assertEqual(result["terms"][-1], "tenth")
+
     def test_no_path_out_of_matchedexcerpt_returns_the_whole_record(self) -> None:
         # Asserting on source text passed while the behaviour was broken, so this
         # runs the real function instead.
@@ -1401,67 +1410,40 @@ console.log(JSON.stringify({
         self.assertLess(results["largeMs"], 400, results)
 
     def test_the_body_ranking_signal_stays_under_the_metadata_weights(self) -> None:
-        node = shutil.which("node")
-        if not node:
-            self.skipTest("node unavailable")
-        source = self.interface_source()
-        block = re.search(
-            r"(const BODY_TERM_LIMIT.*?\n    function bodyTermScore\(record, token\) \{.*?\n    \})",
-            source,
-            re.S,
-        )
-        self.assertIsNotNone(block, "bodyTermScore not found")
-        assert block is not None
-        harness = """
-const normalize = (value = "") => String(value).toLowerCase().normalize("NFKC");
-const recordSearchText = (record) => record._search;
-%s
-const score = (n) => bodyTermScore({_search: "needle ".repeat(n)}, "needle");
-console.log(JSON.stringify({
-  one: score(1), ten: score(10), many: score(5000),
-  monotonic: score(1) < score(10) && score(10) < score(100),
-  absent: score(0),
-}));
-""" % block.group(1)
-        with tempfile.TemporaryDirectory() as temporary:
-            script = Path(temporary) / "score.mjs"
-            script.write_text(harness, encoding="utf-8")
-            completed = subprocess.run(
-                [node, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=30
-            )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        result = json.loads(completed.stdout)
-        self.assertEqual(result["absent"], 0)
-        self.assertTrue(result["monotonic"])
-        # A project or title hit adds 18. Frequency has to stay a tiebreaker under
-        # that, however often a long session repeats the word.
-        self.assertLess(result["many"], 18)
+        from search_index import SearchIndex
+        records = [{"id": str(n), "title": "needle" if n == 0 else "", "excerpt": "needle " * n} for n in (0, 1, 10, 100, 5000)]
+        rows = SearchIndex({"records": records}).search({"q": "needle"})["records"]
+        # A named session wins over repetition; repetition still breaks body ties.
+        self.assertEqual(rows[0]["id"], "0")
+        ids = [row["id"] for row in rows]
+        self.assertLess(ids.index("10"), ids.index("1"))
+        self.assertLess(ids.index("100"), ids.index("10"))
 
 
 class ResponseCompressionTest(DemoServerTestCase):
-    """The index carries every request now, so it travels compressed."""
+    """Paged result bodies preserve compression negotiation and exact content."""
 
     def test_the_index_is_gzipped_for_a_client_that_accepts_it(self) -> None:
         status, headers, body = self.raw_request(
-            "GET", "/api/index", headers={"Accept-Encoding": "gzip, deflate"}
+            "GET", "/api/search", headers={"Accept-Encoding": "gzip, deflate"}
         )
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("content-encoding"), "gzip")
         self.assertIn("accept-encoding", str(headers.get("vary", "")).lower())
         payload = json.loads(gzip.decompress(body).decode("utf-8"))
-        self.assertTrue(payload["demo"])
-        self.assertEqual(len(payload["records"]), 20)
+        self.assertIn("revision", payload)
+        self.assertEqual(len(payload["records"]), 24)
 
     def test_the_same_index_is_plain_json_without_the_header(self) -> None:
-        status, headers, body = self.raw_request("GET", "/api/index")
+        status, headers, body = self.raw_request("GET", "/api/search")
         self.assertEqual(status, 200)
         self.assertNotIn("content-encoding", headers)
-        self.assertEqual(len(json.loads(body.decode("utf-8"))["records"]), 20)
+        self.assertEqual(len(json.loads(body.decode("utf-8"))["records"]), 24)
 
     def test_compression_does_not_change_what_the_reader_receives(self) -> None:
-        _, _, plain = self.raw_request("GET", "/api/index")
+        _, _, plain = self.raw_request("GET", "/api/search")
         _, _, packed = self.raw_request(
-            "GET", "/api/index", headers={"Accept-Encoding": "gzip"}
+            "GET", "/api/search", headers={"Accept-Encoding": "gzip"}
         )
         # Demo timestamps are offsets from the moment of the call, so compare the
         # fields that identify a record rather than the whole payload.
@@ -1477,13 +1459,13 @@ class ResponseCompressionTest(DemoServerTestCase):
     def test_a_content_length_matches_the_compressed_body(self) -> None:
         # A mismatch here hangs the browser rather than failing loudly.
         _, headers, body = self.raw_request(
-            "GET", "/api/index", headers={"Accept-Encoding": "gzip"}
+            "GET", "/api/search", headers={"Accept-Encoding": "gzip"}
         )
         self.assertEqual(int(headers.get("content-length", "0")), len(body))
 
     def test_an_identity_only_client_is_not_sent_gzip(self) -> None:
         _, headers, _ = self.raw_request(
-            "GET", "/api/index", headers={"Accept-Encoding": "identity"}
+            "GET", "/api/search", headers={"Accept-Encoding": "identity"}
         )
         self.assertNotIn("content-encoding", headers)
 
@@ -1492,14 +1474,14 @@ class ResponseCompressionTest(DemoServerTestCase):
         # rather than against the helper, because that is where it went wrong.
         for header in ("gzip;q=0", "identity;q=1, gzip;q=0", "gzip; q=0"):
             _, headers, _ = self.raw_request(
-                "GET", "/api/index", headers={"Accept-Encoding": header}
+                "GET", "/api/search", headers={"Accept-Encoding": header}
             )
             self.assertNotIn("content-encoding", headers, header)
 
     def test_a_weighted_acceptance_still_compresses(self) -> None:
         for header in ("gzip;q=0.5", "br;q=1.0, gzip;q=0.8", "x-gzip"):
             _, headers, _ = self.raw_request(
-                "GET", "/api/index", headers={"Accept-Encoding": header}
+                "GET", "/api/search", headers={"Accept-Encoding": header}
             )
             self.assertEqual(headers.get("content-encoding"), "gzip", header)
 

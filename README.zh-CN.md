@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-**面向 Codex、Claude 与 Kimi 本地记录的跨 AI 项目搜索索引。**
+**面向 Codex、Claude、Kimi、WorkBuddy、千问办公、豆包工作与 DeepSeek Harness 的本地项目搜索索引。**
 
 可通过项目、客户、提示词片段、工作目录或文件名定位记录，并返回相应的 AI 会话与项目路径。
 
@@ -11,7 +11,9 @@
 ![数据](https://img.shields.io/badge/data-local_only-111111)
 ![许可](https://img.shields.io/badge/license-MIT-111111)
 
-> 当前状态：v1.3.0，提供独立的英文版与中文版，均支持 macOS 与 Windows。
+> 当前状态：v1.4.0，提供独立的英文版与中文版，均支持 macOS 与 Windows。
+
+
 
 ## AI Project Finder 的定位
 
@@ -42,7 +44,7 @@ https://github.com/user-attachments/assets/193f0c7a-6d1f-4fbf-a9d9-be2834b9ce15
 
 ### 跨 AI 本地索引
 
-AI Project Finder 可以读取 Codex、Claude Code、Kimi Code，以及兼容的 Kimi Desktop Work 本地历史。浏览器工具和云端聊天可以通过手工记录补充。
+AI Project Finder 可以读取 Codex、Claude Code、Kimi Code、兼容的 Kimi Desktop Work、WorkBuddy、千问办公、豆包工作本地缓存，以及 DeepSeek Harness 历史。各来源的覆盖范围见文末说明；其他浏览器工具和云端聊天可以通过手工记录补充。
 
 默认自动识别：
 
@@ -106,7 +108,7 @@ Python 应用只使用标准库，无需执行 `pip install`。
 
 #### 下载发行版
 
-1. 下载并解压 [AI Project Finder v1.3.0 中文版 macOS 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_ZH_macOS_v1.3.0.zip)。
+1. 下载并解压 [AI Project Finder v1.4.0 中文版 macOS 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.4.0/AI_Project_Finder_ZH_macOS_v1.4.0.zip)。
 2. 将文件夹移动到稳定位置，例如 `~/Applications/AI Project Finder`。
 3. 按住 Control 点击 `install.command`，选择 **打开**，完成首次运行确认。
 4. 应用会在 `http://127.0.0.1:4388` 打开。
@@ -138,7 +140,7 @@ chmod +x install.command start.command
 
 #### 下载发行版
 
-1. 下载并解压 [AI Project Finder v1.3.0 中文版 Windows 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_ZH_Windows_v1.3.0.zip)。
+1. 下载并解压 [AI Project Finder v1.4.0 中文版 Windows 安装包](https://github.com/stevensilu/ai-project-finder/releases/download/v1.4.0/AI_Project_Finder_ZH_Windows_v1.4.0.zip)。
 2. 将文件夹移动到稳定位置，例如 `%LOCALAPPDATA%\Programs\AI Project Finder`。
 3. 双击 `install.bat`。
 4. 应用会在 `http://127.0.0.1:4388` 打开。
@@ -187,6 +189,18 @@ landing page localization
 - 将更新时间限定为最近 30 天、90 天或一年。
 - 按相关度、最新或最早排序。
 
+### 本地搜索与分页阅读
+
+搜索由这台电脑上的 Python 服务执行。页面先加载概况，每次获取 30 条结果和关键词附近的短片段，不再在打开时下载所有会话正文。项目卡片先显示 5 条匹配会话，点击后继续加载；项目视图也支持搜索已索引的用户请求。
+
+**查看已索引内容**会打开命中位置附近的一段文本，每段最多 12,000 字符，可以前后翻段或从开头查看。内容直接来自索引，无需 AI 生成摘要。仍可打开原会话查看完整对话。编辑手动记录时会单独读取原始备注，保存时不会把短预览写回原记录。
+
+保留中文子串、Unicode 规范化、引号短语、全部查询词、来源与时间筛选、相关度排序。查询最多 4,096 字符。分页与索引版本绑定，刷新或编辑后会重新读取结果，较早发出的请求也不会覆盖较新的搜索结果。
+
+本地接口集成须留意：通过验证的 `GET /api/index` 现在只返回概况，不含 `records`。分页结果使用 `/api/search?q=...&offset=0&limit=30`，正文使用 `/api/record?id=...&offset=0`。搜索每页最多 60 条，正文每段最多 12,000 字符；后续请求携带返回的 `revision`，索引变化时返回 HTTP 409。沿用原有的本地访问保护。
+
+Python 服务仍会在本地内存中保留完整索引，第一次关键词搜索时建立规范化文本缓存。这次限制的是浏览器传输和渲染量，尚未限制索引文件体积或服务内存。持久化磁盘检索可作为后续优化。
+
 ### 打开结果
 
 结果可能提供**打开会话**、**打开工作区**、**打开命令行**、**复制路径**或**复制会话信息**。可用动作会根据来源和客户端集成情况变化。
@@ -232,7 +246,11 @@ landing page localization
     "codex": "auto",
     "claude": "auto",
     "kimi": "auto",
-    "kimi-desktop": "auto"
+    "kimi-desktop": "auto",
+    "workbuddy": "auto",
+    "qwenwork": "auto",
+    "doubao-work": "auto",
+    "deepseek-harness": "auto"
   }
 }
 ```
@@ -437,3 +455,25 @@ python3 -m unittest discover -s tests
 ## 许可证
 
 采用 MIT 许可证，详见 [LICENSE](LICENSE)。
+
+
+## v1.4.0 新增本地来源
+
+| 来源 | macOS 自动发现位置 | 覆盖范围与打开方式 |
+| --- | --- | --- |
+| WorkBuddy | `~/.workbuddy/projects` + `~/.workbuddy/workbuddy.db` | 用户请求、最新标题、工作目录；直接打开对应任务。排除已删除任务、后台自动化及子代理。可用 `WORKBUDDY_HOME` 覆盖根目录。 |
+| 千问办公（CN） | `~/Library/Application Support/QwenWorkCN/data/agents.db` | 桌面任务标题、用户请求、工作目录，包含 SQLite WAL 已提交更新；跳转到对应任务及子会话。排除已删除任务。 |
+| 豆包工作 | `~/Library/Application Support/DoubaoWork/*/IndexedDB/chrome_doubaowork-{chat,launcher}_0.indexeddb.leveldb` | 读取本机缓存中的用户对话，排除欢迎消息与旧版/删除的缓存键。打开客户端后可用「复制标题」定位。覆盖范围受本地缓存限制，不能视为完整云端历史同步。 |
+| DeepSeek Harness | `~/.dsh/sessions/**/session.jsonl[.zstd]` | 主会话标题、用户请求、工作目录；排除子代理和备份文件。打开本地网页后可用「复制标题」定位。可用 `DSH_HOME` 覆盖根目录。 |
+
+Harness 的历史文件使用 Zstandard 压缩。推荐 **Python 3.14+**，无需安装 Python 依赖；Python 3.10–3.13 可为所用解释器安装 `zstandard`，或确保 `PATH` 中有 `zstd` 命令。建立索引时不访问 Harness API，网页服务未运行时仍可搜索历史。
+
+默认跳转地址为 `http://127.0.0.1:3080/`，端口不同可修改 `config.json` 的 `deepseek_harness_url`。只接受本机 HTTP(S) 地址。目前检查的 Harness 网页切换会话后 URL 不变，因此按钮明确显示为「打开 DeepSeek Harness」，另提供「复制标题」。
+
+Windows 会在 `%APPDATA%` 与 `%LOCALAPPDATA%` 中发现千问和豆包目录。新增适配器已用 macOS 客户端数据验证，Windows 路径与解析逻辑有合成测试，尚未在真实 Windows 客户端上验证。自定义路径可指向 WorkBuddy 项目目录、千问 `agents.db`、豆包应用目录/IndexedDB 目录或 Harness 会话目录。
+
+来源配置支持 `false` 或 `[]` 停用。「来源状态」区分未检测到、暂无用户会话、已停用和读取失败，并显示扫描路径。刷新会复用未改变的会话，SQLite WAL 和 WorkBuddy 任务元数据变化都会触发重新解析。
+
+搜索保留全部输入关键词，增加输入防抖及中文输入法兼容；会话、项目两个视图均有分页。手动记录使用原生来源标签时，仍能正常打开保存的网页链接。
+
+更新运行副本时保留 `config.json` 和整个 `data/` 目录。缺失的新增来源配置会自动发现。需复制全部代码与静态资源，特别是 `search_index.py`、`desktop_sources.py` 和 `vendor/`，然后重启。手动记录和项目归属不需要重建。版本变更见 `CHANGELOG.md`。

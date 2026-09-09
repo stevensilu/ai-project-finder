@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-**A private, local search index for work spread across Codex, Claude, and Kimi.**
+**A private, local search index for work across Codex, Claude, Kimi, WorkBuddy, Qwen Work, Doubao Work, and DeepSeek Harness.**
 
 Search by project, client, prompt fragment, workspace, or filename, then return to the matching AI session and working directory.
 
@@ -11,7 +11,9 @@ Search by project, client, prompt fragment, workspace, or filename, then return 
 ![Data](https://img.shields.io/badge/data-local_only-111111)
 ![License](https://img.shields.io/badge/license-MIT-111111)
 
-> Current status: v1.3.0 with separate English and Chinese editions for macOS and Windows.
+> Current status: v1.4.0 with separate English and Chinese editions for macOS and Windows.
+
+
 
 ## Why AI Project Finder
 
@@ -42,7 +44,7 @@ The walkthrough covers:
 
 ### Cross-AI local index
 
-AI Project Finder reads supported local histories from Codex, Claude Code, Kimi Code, and compatible Kimi Desktop Work sessions. Browser-only tools and cloud chats can be added as manual traces.
+AI Project Finder reads supported local histories from Codex, Claude Code, Kimi Code, compatible Kimi Desktop Work, WorkBuddy, Qwen Work, locally cached Doubao Work conversations, and DeepSeek Harness. Source-specific coverage is documented below. Other browser tools and cloud chats can be added as manual traces.
 
 Default path discovery includes:
 
@@ -72,6 +74,18 @@ source:claude          only sessions from one tool
 ```
 
 Results are ranked by where a match lands, with recent sessions weighted slightly higher. The search text, source filter, view, date range, and sort order are kept in the address bar, so a result list can be reloaded, bookmarked, or shared as a link on the same computer.
+
+### Local search and paged reading
+
+Search runs in the Python service on this computer. The dashboard loads metadata and 30 results at a time, with short snippets around matches. It does not download every conversation when opened. Project cards initially show five matching sessions and fetch more on request; project search also covers indexed request text.
+
+**View indexed text** opens a 12,000-character segment near the match, with controls for earlier/later text and the beginning. This is the text retained by the index, not a generated AI summary. Opening the original session remains available. Manual edits fetch the original notes so saving does not replace them with a short preview.
+
+Chinese substring search, NFKC Unicode normalization, quoted phrases, all query terms, source filters, date ranges and ranking remain available. Queries may contain up to 4,096 characters. Results are tied to an index revision; refreshing or editing reloads changed data. Superseded browser requests cannot replace newer results.
+
+For local integrations, authenticated `GET /api/index` now returns metadata without `records`; use `/api/search?q=...&offset=0&limit=30` for results and `/api/record?id=...&offset=0` for text. Search pages are capped at 60 records and text pages at 12,000 characters. Send the returned `revision` with subsequent pages; a changed revision returns HTTP 409. These endpoints use the same local API protections.
+
+The service retains the full index in local memory and prepares normalized text on the first keyword search. Paging bounds browser transfer and rendering; it does not cap the size of the saved index or the service's memory. A persistent disk search index is a separate future improvement.
 
 ### Session and project views
 
@@ -106,7 +120,7 @@ The Python application uses only the standard library. No `pip install` step is 
 
 #### Release download
 
-1. Download and unzip [AI Project Finder v1.3.0 — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_macOS_v1.3.0.zip).
+1. Download and unzip [AI Project Finder v1.4.0 — English for macOS](https://github.com/stevensilu/ai-project-finder/releases/download/v1.4.0/AI_Project_Finder_EN_macOS_v1.4.0.zip).
 2. Move the folder to a stable location, such as `~/Applications/AI Project Finder`.
 3. Control-click `install.command`, select **Open**, and approve the first launch.
 4. The dashboard opens at `http://127.0.0.1:4388`.
@@ -136,7 +150,7 @@ chmod +x install.command start.command
 
 #### Release download
 
-1. Download and unzip [AI Project Finder v1.3.0 — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.3.0/AI_Project_Finder_EN_Windows_v1.3.0.zip).
+1. Download and unzip [AI Project Finder v1.4.0 — English for Windows](https://github.com/stevensilu/ai-project-finder/releases/download/v1.4.0/AI_Project_Finder_EN_Windows_v1.4.0.zip).
 2. Move the folder to a stable location, such as `%LOCALAPPDATA%\Programs\AI Project Finder`.
 3. Double-click `install.bat`.
 4. The dashboard opens at `http://127.0.0.1:4388`.
@@ -229,7 +243,11 @@ The default `config.json` uses automatic discovery:
     "codex": "auto",
     "claude": "auto",
     "kimi": "auto",
-    "kimi-desktop": "auto"
+    "kimi-desktop": "auto",
+    "workbuddy": "auto",
+    "qwenwork": "auto",
+    "doubao-work": "auto",
+    "deepseek-harness": "auto"
   }
 }
 ```
@@ -434,3 +452,25 @@ python3 -m unittest discover -s tests
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+
+## New local sources in v1.4.0
+
+| Source | Automatic discovery on macOS | Coverage and open action |
+| --- | --- | --- |
+| WorkBuddy | `~/.workbuddy/projects` and `~/.workbuddy/workbuddy.db` | User requests, current titles and workspaces; opens the exact task. Deleted/background tasks and helper transcripts are excluded. `WORKBUDDY_HOME` overrides the base folder. |
+| Qwen Work (CN) | `~/Library/Application Support/QwenWorkCN/data/agents.db` | Desktop task titles, user requests and workspaces, including committed SQLite WAL changes; opens the task/sub-chat. Deleted chats are excluded. |
+| Doubao Work | `~/Library/Application Support/DoubaoWork/*/IndexedDB/chrome_doubaowork-{chat,launcher}_0.indexeddb.leveldb` | Only locally cached user conversations. Welcome messages and old/deleted cache keys are excluded. Opens the app; use **Copy title** to locate the conversation. This is partial coverage, not a cloud-history sync. |
+| DeepSeek Harness | `~/.dsh/sessions/**/session.jsonl[.zstd]` | Main-session titles, user requests and workspaces; subagents and backup logs are excluded. Opens the configured local Web UI; use **Copy title** to find the session. `DSH_HOME` overrides the base folder. |
+
+Harness stores Zstandard-compressed histories. Python **3.14+** reads these with its standard library. On Python 3.10–3.13, install `zstandard` for that interpreter or make the `zstd` executable available on `PATH`. No network connection to Harness is required for indexing, and indexing works while its Web UI is stopped.
+
+The default open address is `http://127.0.0.1:3080/`. Set `deepseek_harness_url` in `config.json` for a different local port. Only loopback HTTP(S) addresses are accepted. The inspected Harness Web UI does not expose a conversation-specific URL, so **Open Harness** opens the app rather than claiming to select a session.
+
+Qwen and Doubao also discover their app folders under `%APPDATA%` and `%LOCALAPPDATA%` on Windows. These new adapters were verified against macOS client data; Windows discovery and parser behavior are covered by synthetic tests, not a live Windows client check. Custom source paths can point to a WorkBuddy project directory, a Qwen `agents.db`, a Doubao Work profile root/IndexedDB directory, or a Harness sessions directory.
+
+Set a source to `false` or `[]` to disable it. **Source status** distinguishes a missing client, an empty cache, a disabled source and a read error, and shows the paths actually checked. Refresh reuses unchanged transcripts and databases; SQLite WAL and external WorkBuddy metadata are included in cache invalidation.
+
+Search now keeps all entered terms, waits briefly while typing (including Chinese IME input), and pages both session and project results. Manual traces can use a native source label while still opening their saved web link.
+
+Existing installations can keep `config.json` and the entire `data/` directory. Missing new source keys default to automatic discovery. Copy **all code and assets**, including `search_index.py`, `desktop_sources.py` and `vendor/`, then restart. Do not overwrite project assignments or manual traces. See `CHANGELOG.md` for the release changes and remaining limits.

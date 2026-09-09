@@ -6,6 +6,11 @@
     "codex": "auto",
     "claude": "auto",
     "kimi": "auto",
-    "kimi-desktop": "auto"
-  }
+    "kimi-desktop": "auto",
+    "workbuddy": "auto",
+    "qwenwork": "auto",
+    "doubao-work": "auto",
+    "deepseek-harness": "auto"
+  },
+  "deepseek_harness_url": "http://127.0.0.1:3080/"
 }
