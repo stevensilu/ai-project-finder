@@ -1,8 +1,9 @@
 # AI Project Finder
 
 AI Project Finder is the public, portable source for a local cross-AI session
-index covering Codex, Claude Code, Kimi Code, and compatible Kimi Desktop Work
-records. `README.md` and `README.zh-CN.md` are the user-facing contracts.
+index covering Codex, Claude Code, Kimi Code, compatible Kimi Desktop Work,
+WorkBuddy, Qwen Work, locally cached Doubao Work conversations, and DeepSeek
+Harness records. `README.md` and `README.zh-CN.md` are the user-facing contracts.
 
 ## Run and verify
 
@@ -19,7 +20,10 @@ synthetic or privacy-safe visual verification.
 
 ## Stack and structure
 
-- `app.py`: Python standard-library server, source adapters, indexer, and open actions.
+- `app.py`: Python standard-library server, original adapters, indexer, and open actions.
+- `desktop_sources.py`: read-only desktop/Harness adapters; `vendor/chromium/` is a pinned MIT IndexedDB decoder subset.
+- Harness `.zstd` needs Python 3.14 stdlib, optional `zstandard`, or a `zstd` CLI.
+- Source tests must disable all unneeded adapters, including future ones; never scan real user histories in a unit test.
 - `static/index.html`: self-contained localized interface; vendored assets live under `static/vendor/`.
 - `config.json`: portable defaults and source discovery; English is the repository default.
 - `demo/`: synthetic fixtures and the demo recording script.
@@ -47,3 +51,8 @@ The current public release is v1.3.0: English and Simplified Chinese editions
 for macOS and Windows. `APP_VERSION` in `app.py` is the single source for the
 release number; the README status lines and download links must agree with it,
 and `VersionConsistencyTest` fails when they drift.
+
+The working tree includes an unreleased September source expansion on top of
+GitHub main `616fe07` (merged PR #12). Do not describe the existing v1.3.0
+downloads as containing these changes. New macOS sources are live-verified;
+Windows source discovery is synthetic-test coverage only.

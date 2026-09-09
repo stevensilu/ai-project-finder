@@ -27,6 +27,7 @@ class AutomaticPathsTest(unittest.TestCase):
                 "claude": "auto",
                 "kimi": "auto",
                 "kimi-desktop": "auto",
+                **{name: "auto" for name in app.desktop_sources.LABELS},
             },
         )
         self.assertEqual(app.DEFAULT_CONFIG["locale"], "en")
@@ -262,11 +263,11 @@ class DemoFixtureTest(unittest.TestCase):
     def test_demo_payload_is_balanced_and_contains_only_synthetic_paths(self) -> None:
         payload = app.load_demo_payload()
         self.assertTrue(payload["demo"])
-        self.assertEqual(payload["summary"]["records"], 20)
+        self.assertEqual(payload["summary"]["records"], 24)
         self.assertEqual(payload["summary"]["projects"], 6)
         self.assertEqual(
             payload["summary"]["sources"],
-            {"claude": 5, "codex": 5, "kimi": 5, "kimi-desktop": 5},
+            {"claude": 5, "codex": 5, "kimi": 5, "kimi-desktop": 5, **{name: 1 for name in app.desktop_sources.LABELS}},
         )
         self.assertTrue(
             all(
@@ -289,7 +290,7 @@ class DemoFixtureTest(unittest.TestCase):
             payload = app.load_index_payload()
             guarded_index.exists.assert_not_called()
         self.assertTrue(payload["demo"])
-        self.assertEqual(len(payload["records"]), 20)
+        self.assertEqual(len(payload["records"]), 24)
 
     def test_chinese_demo_payload_uses_localized_project_content(self) -> None:
         with patch.object(app, "APP_LOCALE", "zh-CN"):
@@ -299,7 +300,7 @@ class DemoFixtureTest(unittest.TestCase):
             for record in payload["records"]
             if record["session_id"].startswith("demo-atlas-")
         ]
-        self.assertEqual(len(atlas), 4)
+        self.assertEqual(len(atlas), 8)
         self.assertTrue(all(record["project"] == "阿特拉斯发布" for record in atlas))
         self.assertTrue(all(str(record["cwd"]).startswith("~/演示工作区/") for record in atlas))
         # The interface builds its own searchable text from these fields, so the
@@ -562,6 +563,7 @@ class PromptRecallTest(unittest.TestCase):
             config = {
                 "max_prompt_chars": 9000,
                 "sources": {
+                    **{name: False for name in app.desktop_sources.LABELS},
                     "codex": str(sessions),
                     "claude": str(root / "absent"),
                     "kimi": str(root / "absent"),
@@ -762,6 +764,7 @@ class IndexBuildTest(unittest.TestCase):
             "max_prompt_chars": 9000,
             "locale": "en",
             "sources": {
+                    **{name: False for name in app.desktop_sources.LABELS},
                 "codex": str(self.sessions),
                 "claude": str(root / "absent"),
                 "kimi": str(root / "absent"),
@@ -1040,6 +1043,7 @@ class ProjectAssignmentTest(unittest.TestCase):
         config = {
             "max_prompt_chars": 9000,
             "sources": {
+                    **{name: False for name in app.desktop_sources.LABELS},
                 "codex": str(self.sessions),
                 "claude": str(root / "absent"),
                 "kimi": str(root / "absent"),
@@ -1142,7 +1146,7 @@ class ManualTraceEndpointTest(unittest.TestCase):
         # An empty mapping falls through to automatic discovery, which reads the
         # real local history: slow, and not this test's business.
         absent_sources = {
-            name: str(root / "absent") for name in ("codex", "claude", "kimi", "kimi-desktop")
+            name: str(root / "absent") for name in app.DEFAULT_CONFIG["sources"]
         }
         for attribute, value in (
             ("load_config", {"sources": absent_sources, "max_prompt_chars": 9000}),
@@ -1314,6 +1318,11 @@ class ExcerptWindowTest(unittest.TestCase):
         return json.loads(completed.stdout)
 
 
+    def test_query_keeps_the_ninth_and_later_terms(self) -> None:
+        result = self.run_node('console.log(JSON.stringify(parseQuery("one two three four five six seven eight ninth tenth")));')
+        self.assertEqual(len(result["terms"]), 10)
+        self.assertEqual(result["terms"][-1], "tenth")
+
     def test_no_path_out_of_matchedexcerpt_returns_the_whole_record(self) -> None:
         # Asserting on source text passed while the behaviour was broken, so this
         # runs the real function instead.
@@ -1450,13 +1459,13 @@ class ResponseCompressionTest(DemoServerTestCase):
         self.assertIn("accept-encoding", str(headers.get("vary", "")).lower())
         payload = json.loads(gzip.decompress(body).decode("utf-8"))
         self.assertTrue(payload["demo"])
-        self.assertEqual(len(payload["records"]), 20)
+        self.assertEqual(len(payload["records"]), 24)
 
     def test_the_same_index_is_plain_json_without_the_header(self) -> None:
         status, headers, body = self.raw_request("GET", "/api/index")
         self.assertEqual(status, 200)
         self.assertNotIn("content-encoding", headers)
-        self.assertEqual(len(json.loads(body.decode("utf-8"))["records"]), 20)
+        self.assertEqual(len(json.loads(body.decode("utf-8"))["records"]), 24)
 
     def test_compression_does_not_change_what_the_reader_receives(self) -> None:
         _, _, plain = self.raw_request("GET", "/api/index")

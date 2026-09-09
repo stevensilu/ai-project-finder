@@ -13,6 +13,9 @@
 
 > 当前状态：v1.3.0，提供独立的英文版与中文版，均支持 macOS 与 Windows。
 
+
+> 本地开发更新（尚未发布）：已整合 PR #12，并新增 WorkBuddy、千问办公、豆包工作缓存与 DeepSeek Harness。下面的 v1.3.0 下载包是已发布旧版，不包含这些新增适配器。
+
 ## AI Project Finder 的定位
 
 同一项工作可能分布在多个 AI 工具中。研究从 Claude 开始，代码在 Codex 中继续，最后由 Kimi 补充处理。过一段时间后，仍然容易记得的线索通常是客户名称、`launch-plan.xlsx` 这样的文件名，或原始需求中的一句话。
@@ -232,7 +235,11 @@ landing page localization
     "codex": "auto",
     "claude": "auto",
     "kimi": "auto",
-    "kimi-desktop": "auto"
+    "kimi-desktop": "auto",
+    "workbuddy": "auto",
+    "qwenwork": "auto",
+    "doubao-work": "auto",
+    "deepseek-harness": "auto"
   }
 }
 ```
@@ -437,3 +444,25 @@ python3 -m unittest discover -s tests
 ## 许可证
 
 采用 MIT 许可证，详见 [LICENSE](LICENSE)。
+
+
+## 新增本地来源（尚未发布）
+
+| 来源 | macOS 自动发现位置 | 覆盖范围与打开方式 |
+| --- | --- | --- |
+| WorkBuddy | `~/.workbuddy/projects` + `~/.workbuddy/workbuddy.db` | 用户请求、最新标题、工作目录；直接打开对应任务。排除已删除任务、后台自动化及子代理。可用 `WORKBUDDY_HOME` 覆盖根目录。 |
+| 千问办公（CN） | `~/Library/Application Support/QwenWorkCN/data/agents.db` | 桌面任务标题、用户请求、工作目录，包含 SQLite WAL 已提交更新；跳转到对应任务及子会话。排除已删除任务。 |
+| 豆包工作 | `~/Library/Application Support/DoubaoWork/*/IndexedDB/chrome_doubaowork-{chat,launcher}_0.indexeddb.leveldb` | 读取本机缓存中的用户对话，排除欢迎消息与旧版/删除的缓存键。打开客户端后可用「复制标题」定位。覆盖范围受本地缓存限制，不能视为完整云端历史同步。 |
+| DeepSeek Harness | `~/.dsh/sessions/**/session.jsonl[.zstd]` | 主会话标题、用户请求、工作目录；排除子代理和备份文件。打开本地网页后可用「复制标题」定位。可用 `DSH_HOME` 覆盖根目录。 |
+
+Harness 的历史文件使用 Zstandard 压缩。推荐 **Python 3.14+**，无需安装 Python 依赖；Python 3.10–3.13 可为所用解释器安装 `zstandard`，或确保 `PATH` 中有 `zstd` 命令。建立索引时不访问 Harness API，网页服务未运行时仍可搜索历史。
+
+默认跳转地址为 `http://127.0.0.1:3080/`，端口不同可修改 `config.json` 的 `deepseek_harness_url`。只接受本机 HTTP(S) 地址。目前检查的 Harness 网页切换会话后 URL 不变，因此按钮明确显示为「打开 DeepSeek Harness」，另提供「复制标题」。
+
+Windows 会在 `%APPDATA%` 与 `%LOCALAPPDATA%` 中发现千问和豆包目录。新增适配器已用 macOS 客户端数据验证，Windows 路径与解析逻辑有合成测试，尚未在真实 Windows 客户端上验证。自定义路径可指向 WorkBuddy 项目目录、千问 `agents.db`、豆包应用目录/IndexedDB 目录或 Harness 会话目录。
+
+来源配置支持 `false` 或 `[]` 停用。「来源状态」区分未检测到、暂无用户会话、已停用和读取失败，并显示扫描路径。刷新会复用未改变的会话，SQLite WAL 和 WorkBuddy 任务元数据变化都会触发重新解析。
+
+搜索保留全部输入关键词，增加输入防抖及中文输入法兼容；会话、项目两个视图均有分页。手动记录使用原生来源标签时，仍能正常打开保存的网页链接。
+
+更新运行副本时保留 `config.json` 和整个 `data/` 目录。缺失的新增来源配置会自动发现。需复制全部代码与静态资源，特别是 `desktop_sources.py` 和 `vendor/`，然后重启。手动记录和项目归属不需要重建。开发变更见 `CHANGELOG.md`。

@@ -13,6 +13,9 @@ Search by project, client, prompt fragment, workspace, or filename, then return 
 
 > Current status: v1.3.0 with separate English and Chinese editions for macOS and Windows.
 
+
+> Unreleased working-tree update: includes PR #12 plus WorkBuddy, Qwen Work, Doubao Work cached conversations, and DeepSeek Harness. The published v1.3.0 downloads below do not include these adapters yet.
+
 ## Why AI Project Finder
 
 AI work is often distributed across several tools. A research thread may begin in Claude, continue in Codex, and finish in Kimi. Weeks later, the useful clue may be a client name, a file such as `launch-plan.xlsx`, or one sentence from the original request.
@@ -229,7 +232,11 @@ The default `config.json` uses automatic discovery:
     "codex": "auto",
     "claude": "auto",
     "kimi": "auto",
-    "kimi-desktop": "auto"
+    "kimi-desktop": "auto",
+    "workbuddy": "auto",
+    "qwenwork": "auto",
+    "doubao-work": "auto",
+    "deepseek-harness": "auto"
   }
 }
 ```
@@ -434,3 +441,25 @@ python3 -m unittest discover -s tests
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+
+## New local sources (unreleased)
+
+| Source | Automatic discovery on macOS | Coverage and open action |
+| --- | --- | --- |
+| WorkBuddy | `~/.workbuddy/projects` and `~/.workbuddy/workbuddy.db` | User requests, current titles and workspaces; opens the exact task. Deleted/background tasks and helper transcripts are excluded. `WORKBUDDY_HOME` overrides the base folder. |
+| Qwen Work (CN) | `~/Library/Application Support/QwenWorkCN/data/agents.db` | Desktop task titles, user requests and workspaces, including committed SQLite WAL changes; opens the task/sub-chat. Deleted chats are excluded. |
+| Doubao Work | `~/Library/Application Support/DoubaoWork/*/IndexedDB/chrome_doubaowork-{chat,launcher}_0.indexeddb.leveldb` | Only locally cached user conversations. Welcome messages and old/deleted cache keys are excluded. Opens the app; use **Copy title** to locate the conversation. This is partial coverage, not a cloud-history sync. |
+| DeepSeek Harness | `~/.dsh/sessions/**/session.jsonl[.zstd]` | Main-session titles, user requests and workspaces; subagents and backup logs are excluded. Opens the configured local Web UI; use **Copy title** to find the session. `DSH_HOME` overrides the base folder. |
+
+Harness stores Zstandard-compressed histories. Python **3.14+** reads these with its standard library. On Python 3.10–3.13, install `zstandard` for that interpreter or make the `zstd` executable available on `PATH`. No network connection to Harness is required for indexing, and indexing works while its Web UI is stopped.
+
+The default open address is `http://127.0.0.1:3080/`. Set `deepseek_harness_url` in `config.json` for a different local port. Only loopback HTTP(S) addresses are accepted. The inspected Harness Web UI does not expose a conversation-specific URL, so **Open Harness** opens the app rather than claiming to select a session.
+
+Qwen and Doubao also discover their app folders under `%APPDATA%` and `%LOCALAPPDATA%` on Windows. These new adapters were verified against macOS client data; Windows discovery and parser behavior are covered by synthetic tests, not a live Windows client check. Custom source paths can point to a WorkBuddy project directory, a Qwen `agents.db`, a Doubao Work profile root/IndexedDB directory, or a Harness sessions directory.
+
+Set a source to `false` or `[]` to disable it. **Source status** distinguishes a missing client, an empty cache, a disabled source and a read error, and shows the paths actually checked. Refresh reuses unchanged transcripts and databases; SQLite WAL and external WorkBuddy metadata are included in cache invalidation.
+
+Search now keeps all entered terms, waits briefly while typing (including Chinese IME input), and pages both session and project results. Manual traces can use a native source label while still opening their saved web link.
+
+Existing installations can keep `config.json` and the entire `data/` directory. Missing new source keys default to automatic discovery. Copy **all code and assets**, including `desktop_sources.py` and `vendor/`, then restart. Do not overwrite project assignments or manual traces. See `CHANGELOG.md` for the development changes and remaining limits.

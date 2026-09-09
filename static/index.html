@@ -157,6 +157,10 @@
     .filter-block + .filter-block { padding-top: 24px; border-top: 1px solid var(--line); }
     .filter-title { margin: 0 0 13px; color: var(--dim); font-size: 9px; font-weight: 400; letter-spacing: .18em; text-transform: uppercase; }
     .source-filter { width: calc(100% + 16px); margin-left: -8px; display: flex; align-items: center; justify-content: space-between; border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 10px 8px; text-align: left; transition: background .2s ease; }
+    .source-diagnostics { margin-top: 18px; font-size: 12px; line-height: 1.6; }
+    .source-diagnostics summary { cursor: pointer; }
+    .source-diagnostics .source-detail { padding: 10px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+    .source-diagnostics small { display: block; opacity: .7; }
     .source-filter:hover, .source-filter.active { background: var(--hover); }
     .source-name { display: flex; align-items: center; gap: 9px; }
     .source-mark { width: 8px; height: 8px; border: 1px solid var(--ink); }
@@ -342,6 +346,7 @@
           <div class="filter-block">
             <h3 class="filter-title" data-i18n="source">Source</h3>
             <div id="sourceFilters"></div>
+            <details class="source-diagnostics"><summary data-i18n="diagnostics">Source status</summary><div id="sourceDiagnostics"></div></details>
           </div>
           <div class="filter-block">
             <h3 class="filter-title" data-i18n="view">View</h3>
@@ -385,7 +390,7 @@
       </div>
     </section>
 
-    <footer><span data-i18n="footerLocal">AI Project Finder / local only</span><span data-i18n="footerSources">Codex · Claude · Kimi Code · Kimi Desktop · Manual</span></footer>
+    <footer><span data-i18n="footerLocal">AI Project Finder / local only</span><span data-i18n="footerSources">Codex · Claude · Kimi · WorkBuddy · Qwen · Doubao · DeepSeek · Manual</span></footer>
   </main>
 
   <div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
@@ -435,6 +440,8 @@
     const LOCALE = window.__APF_LOCALE__ === "zh-CN" ? "zh-CN" : "en";
     const COPY = {
       en: {
+        diagnostics: "Source status", ready: "Ready", empty: "Detected, no user sessions", missing: "Not detected", disabled: "Disabled", error: "Read failed", cached: "Locally cached conversations only",
+        openApp: "Open {tool} ↗", copyTitle: "Copy title", titleCopied: "TITLE COPIED", appOpenHint: "Opens the app; use the copied title to find this session.",
         pageTitle: "AI Project Finder · Local Project Index",
         brand: `AI PROJECT FINDER <span class="suffix">/ LOCAL INDEX © 2026</span>`,
         demoData: "Demo data", addTrace: "Add trace", refresh: "Refresh",
@@ -451,7 +458,7 @@
         indexStatus: "Index status", indexAria: "Index summary", aiSources: "AI sources", refreshed: "Refreshed",
         recentTraces: "Recent traces", readingIndex: "Reading local index", sortAria: "Sort order",
         relevance: "Relevance", newest: "Newest", oldest: "Oldest", buildingIndex: "Building local trace index",
-        footerLocal: "AI Project Finder / local only", footerSources: "Codex · Claude · Kimi Code · Kimi Desktop · Manual",
+        footerLocal: "AI Project Finder / local only", footerSources: "Codex · Claude · Kimi · WorkBuddy · Qwen · Doubao · DeepSeek · Manual",
         manualIntro: "For ChatGPT, Kimi Web, or tools whose history cannot be read automatically.",
         close: "Close", aiTool: "AI tool", projectClient: "Project / Client", projectPlaceholder: "Atlas Launch", traceTitle: "Trace title",
         tracePlaceholder: "Describe this work in one sentence", locationLabel: "Link or local path",
@@ -496,6 +503,8 @@
         projectRenamed: "PROJECT RENAMED", assignFailed: "ASSIGNMENT NOT SAVED"
       },
       "zh-CN": {
+        diagnostics: "来源状态", ready: "可读取", empty: "已检测到，暂无用户会话", missing: "未检测到", disabled: "已停用", error: "读取失败", cached: "仅覆盖本机已缓存的对话",
+        openApp: "打开 {tool} ↗", copyTitle: "复制标题", titleCopied: "已复制标题", appOpenHint: "打开客户端后，可用复制的标题查找这条会话。",
         pageTitle: "AI Project Finder · 本地项目索引",
         brand: `AI PROJECT FINDER <span class="suffix">/ 本地索引 © 2026</span>`,
         demoData: "演示数据", addTrace: "添加记录", refresh: "刷新",
@@ -512,7 +521,7 @@
         indexStatus: "索引状态", indexAria: "索引概况", aiSources: "AI 来源", refreshed: "刷新时间",
         recentTraces: "最近记录", readingIndex: "正在读取本地索引", sortAria: "排序方式",
         relevance: "相关度", newest: "最近更新", oldest: "较早更新", buildingIndex: "正在建立本地记录索引",
-        footerLocal: "AI Project Finder / 仅本地运行", footerSources: "Codex · Claude · Kimi Code · Kimi Desktop · 手动记录",
+        footerLocal: "AI Project Finder / 仅本地运行", footerSources: "Codex · Claude · Kimi · WorkBuddy · 千问 · 豆包 · DeepSeek · 手动记录",
         manualIntro: "适用于 ChatGPT、Kimi 网页版或无法自动读取历史的工具。",
         close: "关闭", aiTool: "AI 工具", projectClient: "项目 / 客户", projectPlaceholder: "阿特拉斯发布", traceTitle: "记录标题",
         tracePlaceholder: "用一句话描述这次处理", locationLabel: "会话链接或本地路径",
@@ -583,9 +592,9 @@
     const state = {
       records: [], summary: {}, generatedAt: null, query: "", sources: new Set(),
       view: "sessions", range: "all", sort: "relevance", demo: false, locale: LOCALE,
-      limit: PAGE_SIZE, editingTraceId: "", assigning: null
+      sourceStatus: {}, warnings: [], limit: PAGE_SIZE, editingTraceId: "", assigning: null
     };
-    const labels = { codex: "Codex", claude: "Claude", kimi: "Kimi Code", "kimi-desktop": "Kimi Desktop", other: copy.other };
+    const labels = { workbuddy: "WorkBuddy", qwenwork: LOCALE === "zh-CN" ? "千问办公" : "Qwen Work", "doubao-work": LOCALE === "zh-CN" ? "豆包工作" : "Doubao Work", "deepseek-harness": "DeepSeek Harness", codex: "Codex", claude: "Claude", kimi: "Kimi Code", "kimi-desktop": "Kimi Desktop", other: copy.other };
     const root = document.documentElement;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const hasGsap = Boolean(window.gsap && window.ScrollTrigger);
@@ -708,7 +717,7 @@
         if (filter) { sources.push(normalize(filter[1])); continue; }
         words.push(word);
       }
-      const kept = words.filter((word) => normalize(word)).slice(0, 8);
+      const kept = words.filter((word) => normalize(word));
       return {
         terms: kept.map(normalize),
         rawTerms: kept,
@@ -905,14 +914,19 @@
       return record.origin || copy.localSession;
     }
 
+    function openLabelFor(record) {
+      if (record.open_scope === "app") return formatCopy("openApp", {tool: labels[record.source] || record.source_label});
+      return record.source === "kimi-desktop" && !record.manual ? copy.openKimiDesktop : copy.openSession;
+    }
+
     function recordCard(record, index) {
       const artifacts = (record.artifacts || []).slice(0, 3).map((path) => `<span class="artifact" title="${escapeHtml(path)}">${escapeHtml(path.split("/").pop())}</span>`).join("");
       const location = record.cwd || record.session_path || copy.pathUnavailable;
       const excerpt = matchedExcerpt(record, state.query);
       const recordId = escapeHtml(record.id || "");
       const workspaceButton = record.cwd ? `<button class="action-button" type="button" data-open-action="workspace" data-record-id="${recordId}">${copy.openWorkspace}</button>` : "";
-      const kimiCliButton = record.source === "kimi" ? `<button class="action-button" type="button" data-open-action="cli" data-record-id="${recordId}">${copy.openCli}</button>` : "";
-      const openLabel = escapeHtml(record.source === "kimi-desktop" ? copy.openKimiDesktop : copy.openSession);
+      const kimiCliButton = record.source === "kimi" && !record.manual ? `<button class="action-button" type="button" data-open-action="cli" data-record-id="${recordId}">${copy.openCli}</button>` : "";
+      const openLabel = escapeHtml(openLabelFor(record));
       const manualId = escapeHtml(record.manual_id || "");
       const assignButton = `<button class="action-button" type="button" data-assign-record="${recordId}">${copy.assign}</button>`;
       const manualButtons = record.manual
@@ -923,7 +937,7 @@
         <div class="path-row"><span class="path-label">${copy.workspace}</span><span class="path" title="${escapeHtml(location)}">${highlight(location, state.query)}</span><button class="copy" type="button" data-copy="${encodeURIComponent(location)}">${copy.copyPath}</button></div>
         ${excerpt ? `<div class="excerpt">${highlight(excerpt, state.query)}</div>` : ""}
         ${artifacts ? `<div class="artifact-list">${artifacts}</div>` : ""}
-        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(displayOrigin(record))}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${assignButton}${manualButtons}${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
+        <div class="card-footer"><span>${formatCopy("userInputs", {count: Number(record.message_count || 0)})} / ${escapeHtml(displayOrigin(record))}</span><div class="card-actions"><button class="copy" type="button" data-copy="${encodeURIComponent(record.session_path || location)}">${copy.copySession}</button>${record.open_scope === "app" ? `<button class="copy" type="button" data-copy-title="${recordId}" title="${copy.appOpenHint}">${copy.copyTitle}</button>` : ""}${assignButton}${manualButtons}${workspaceButton}${kimiCliButton}<button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}">${openLabel}</button></div></div>
       </article>`;
     }
 
@@ -938,13 +952,13 @@
       return [...groups.entries()].sort((a, b) => {
         if ((a[0] === unclassified) !== (b[0] === unclassified)) return a[0] === unclassified ? 1 : -1;
         return String(b[1][0].updated_at).localeCompare(String(a[1][0].updated_at));
-      }).map(([project, rows], index) => {
+      }).slice(0, state.limit).map(([project, rows], index) => {
         const sources = [...new Set(rows.map((row) => row.source))];
         const workspaces = [...new Set(rows.map((row) => row.cwd).filter(Boolean))];
         const sourceBadges = sources.map((source) => badge({source, source_label: labels[source] || source})).join("");
         const lines = rows.map((row, position) => {
           const recordId = escapeHtml(row.id || "");
-          const lineOpenLabel = row.source === "kimi-desktop" ? copy.openKimiDesktop : copy.open;
+          const lineOpenLabel = openLabelFor(row);
           const hidden = position >= PROJECT_LINE_LIMIT ? " extra" : "";
           return `<div class="session-line${hidden}" data-open-record-id="${recordId}">${badge(row)}<div class="session-line-title" title="${escapeHtml(displayTitle(row))}">${highlight(displayTitle(row), state.query)}</div><time class="date">${relativeDate(row.updated_at)}</time><button class="action-button primary" type="button" data-open-action="session" data-record-id="${recordId}" aria-label="${escapeHtml(formatCopy("openSessionAria", {title: displayTitle(row)}))}">${escapeHtml(lineOpenLabel)}</button></div>`;
         }).join("");
@@ -981,10 +995,11 @@
       const summary = state.view === "sessions"
         ? formatCopy("sessionMeta", {sessions: records.length, projects: projectCount})
         : formatCopy("projectMeta", {projects: projectCount, traces: records.length});
-      const shown = state.view === "sessions" ? Math.min(state.limit, records.length) : records.length;
+      const total = state.view === "sessions" ? records.length : projectCount;
+      const shown = Math.min(state.limit, total);
       // Say when the list is cut short rather than letting it look complete.
-      $("#resultsMeta").textContent = shown < records.length
-        ? `${summary} / ${formatCopy("showingOf", {shown, total: records.length})}`
+      $("#resultsMeta").textContent = shown < total
+        ? `${summary} / ${formatCopy("showingOf", {shown, total})}`
         : summary;
       if (!records.length) {
         $("#resultList").innerHTML = `<div class="empty"><div><strong>${copy.noMatch}</strong><span>${copy.noMatchHelp}</span></div></div>`;
@@ -997,15 +1012,21 @@
           : "";
         $("#resultList").innerHTML = records.slice(0, shown).map(recordCard).join("") + moreButton;
       } else {
-        $("#resultList").innerHTML = projectCards(records);
+        $("#resultList").innerHTML = projectCards(records) + (shown < total ? `<button class="show-more" type="button" id="showMore">${formatCopy("showMore", {count: total - shown})}</button>` : "");
       }
       revealDynamic();
     }
 
     function renderSources() {
       const counts = state.summary.sources || {};
-      const sources = [...new Set([...Object.keys(counts), ...state.records.map((record) => record.source)])];
+      const sources = [...new Set([...Object.keys(state.sourceStatus), ...Object.keys(counts), ...state.records.map((record) => record.source)])];
       $("#sourceFilters").innerHTML = sources.map((source) => `<button class="source-filter ${state.sources.has(source) ? "active" : ""}" type="button" data-source="${escapeHtml(source)}"><span class="source-name"><span class="source-mark"></span>${escapeHtml(labels[source] || source)}</span><span class="source-count">${counts[source] || 0}</span></button>`).join("");
+    }
+
+    function renderDiagnostics() {
+      $("#sourceDiagnostics").innerHTML = Object.entries(state.sourceStatus).map(([source, status]) =>
+        `<div class="source-detail"><strong>${escapeHtml(labels[source] || source)}</strong><small>${escapeHtml(copy[status.state] || status.state || copy.ready)} · ${Number(status.records || 0)}</small>${status.coverage === "cached" ? `<small>${copy.cached}</small>` : ""}${status.error ? `<small>${escapeHtml(status.error)}</small>` : ""}${(status.paths || []).map(path => `<small>${escapeHtml(path)}</small>`).join("")}</div>`
+      ).join("") + (state.warnings.length ? `<div class="source-detail">${state.warnings.map(value => `<small>${escapeHtml(value)}</small>`).join("")}</div>` : "");
     }
 
     function animateNumber(element, value) {
@@ -1061,12 +1082,14 @@
       const payload = await response.json();
       state.records = payload.records || [];
       state.summary = payload.summary || {};
+      state.sourceStatus = payload.source_status || {};
+      state.warnings = payload.warnings || [];
       state.generatedAt = payload.generated_at;
       state.demo = Boolean(payload.demo);
       $("#demoBadge").hidden = !state.demo;
       $("#addButton").hidden = state.demo;
       document.body.dataset.demo = state.demo ? "true" : "false";
-      renderSources(); renderStats(); render();
+      renderSources(); renderDiagnostics(); renderStats(); render();
       if (hasGsap) window.ScrollTrigger.refresh();
     }
 
@@ -1208,8 +1231,11 @@
       });
     }
     function submitSearch() {
+      window.clearTimeout(searchTimer);
+      state.limit = PAGE_SIZE;
       state.query = $("#search").value.trim();
       render();
+      syncUrl();
       scrollToFirstResult();
     }
     async function openRecord(recordId, action = "session", button = null) {
@@ -1232,9 +1258,10 @@
         const demoTargets = {
           codex: "Codex", claude: "Claude", "kimi-web": "Kimi Web",
           "kimi-cli": "Kimi CLI", "kimi-desktop": "Kimi Desktop",
+          ...labels,
           workspace: copy.workspace, web: copy.targetWeb, local: copy.targetLocal
         };
-        const message = messages[payload.mode] || copy.openingSession;
+        const message = messages[payload.mode] || (labels[payload.mode] ? formatCopy("openApp", {tool: labels[payload.mode]}) : copy.openingSession);
         toast(payload.demo ? formatCopy("demoWouldOpen", {target: demoTargets[payload.mode] || copy.openSession}) : message);
       } catch (error) {
         if (error.code === "unauthorized" || error.code === "cross_origin" || error.code === "invalid_host") {
@@ -1257,8 +1284,14 @@
       }
     }
 
-    function applyFilterChange() { state.limit = PAGE_SIZE; render(); syncUrl(); }
-    $("#search").addEventListener("input", (event) => { state.query = event.target.value.trim(); applyFilterChange(); });
+    let searchTimer;
+    function applyFilterChange() { window.clearTimeout(searchTimer); state.limit = PAGE_SIZE; render(); syncUrl(); }
+    $("#search").addEventListener("input", (event) => {
+      state.query = event.target.value.trim();
+      window.clearTimeout(searchTimer);
+      if (!event.isComposing) searchTimer = window.setTimeout(applyFilterChange, 140);
+    });
+    $("#search").addEventListener("compositionend", () => { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(applyFilterChange, 140); });
     $("#search").addEventListener("keydown", (event) => {
       if (event.key !== "Enter" || event.isComposing) return;
       event.preventDefault();
@@ -1280,6 +1313,12 @@
     $("#timeRange").addEventListener("change", (event) => { state.range = event.target.value; applyFilterChange(); });
     $("#sortMode").addEventListener("change", (event) => { state.sort = event.target.value; applyFilterChange(); });
     $("#resultList").addEventListener("click", async (event) => {
+      const titleButton = event.target.closest("[data-copy-title]");
+      if (titleButton) {
+        const record = state.records.find(row => row.id === titleButton.dataset.copyTitle);
+        if (record) { try { await navigator.clipboard.writeText(displayTitle(record)); toast(copy.titleCopied); } catch (_) { toast(displayTitle(record)); } }
+        return;
+      }
       const copyButton = event.target.closest("[data-copy]");
       if (copyButton) {
         const value = decodeURIComponent(copyButton.dataset.copy || "");

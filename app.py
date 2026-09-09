@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import parse_qs, quote, urlparse
 
+import desktop_sources
+
 
 # One place to state the release. README badges, the packaged archives, and the
 # Server header all read from here, which is how server_version drifted to 1.0
@@ -63,6 +65,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "claude": "auto",
         "kimi": "auto",
         "kimi-desktop": "auto",
+        **{source: "auto" for source in desktop_sources.LABELS},
     },
 }
 
@@ -153,7 +156,7 @@ BUILD_LOCK = threading.Lock()
 PARSE_CACHE_FILE = DATA_DIR / "parse-cache.json"
 PROJECTS_FILE = DATA_DIR / "projects.json"
 # Bump when a parser changes what it extracts, so stale entries are discarded.
-PARSE_CACHE_VERSION = 3
+PARSE_CACHE_VERSION = 4
 
 
 def environment_home(name: str, default: Path) -> Path:
@@ -206,6 +209,17 @@ def automatic_source_paths() -> dict[str, list[Path]]:
             / "home"
             / "sessions"
         )
+    paths["workbuddy"] = [environment_home("WORKBUDDY_HOME", HOME_DIR / ".workbuddy")]
+    paths["deepseek-harness"] = [environment_home("DSH_HOME", HOME_DIR / ".dsh") / "sessions"]
+    paths["qwenwork"] = []
+    paths["doubao-work"] = []
+    if IS_WINDOWS:
+        app_bases = [Path(value) for key in ("APPDATA", "LOCALAPPDATA") if (value := os.environ.get(key))]
+    else:
+        app_bases = [HOME_DIR / "Library" / "Application Support"]
+    for base in app_bases:
+        paths["qwenwork"].append(base / "QwenWorkCN" / "data" / "agents.db")
+        paths["doubao-work"].append(base / "DoubaoWork")
     return paths
 
 
@@ -226,6 +240,9 @@ def resolved_source_paths(config: dict[str, Any]) -> dict[str, list[Path]]:
     result: dict[str, list[Path]] = {}
     for source, defaults in automatic.items():
         value = configured.get(source, "auto") if isinstance(configured, dict) else "auto"
+        if value is False or value == []:
+            result[source] = []
+            continue
         custom = expand_source_value(value)
         result[source] = custom or defaults
     return result
@@ -253,6 +270,7 @@ def load_demo_payload() -> dict[str, Any]:
         "claude": "Claude",
         "kimi": "Kimi Code",
         "kimi-desktop": "Kimi Desktop",
+        **desktop_sources.LABELS,
     }
     for position, raw in enumerate(rows, start=1):
         if not isinstance(raw, dict):
@@ -312,6 +330,8 @@ def load_demo_payload() -> dict[str, Any]:
         }
         if source == "kimi-desktop":
             record["open_label"] = "Open Kimi Desktop ↗"
+        if source in {"deepseek-harness", "doubao-work"}:
+            record["open_scope"] = "app"
         records.append(record)
 
     records.sort(key=lambda item: str(item["updated_at"]), reverse=True)
@@ -330,7 +350,7 @@ def load_demo_payload() -> dict[str, Any]:
             "available_sources": len(counts),
         },
         "source_status": {
-            source: {"available": True, "paths": [], "demo": True}
+            source: {"available": True, "paths": [], "demo": True, "state": "ready", "records": counts[source]}
             for source in counts
         },
         "warnings": [],
@@ -353,6 +373,7 @@ def demo_open_mode(record: dict[str, Any], action: str) -> str:
         "claude": "claude",
         "kimi": "kimi-web",
         "kimi-desktop": "kimi-desktop",
+        **{name: name for name in desktop_sources.LABELS},
     }.get(source, "local")
 
 
@@ -707,6 +728,8 @@ def build_open_target(record: dict[str, Any], action: str) -> tuple[str, str]:
 
     source = str(record.get("source") or "").lower()
     session_id = str(record.get("session_id") or "").strip()
+    if record.get("manual"):
+        source = "manual"
     if source in {"codex", "claude", "kimi", "kimi-desktop"} and not SESSION_ID_RE.fullmatch(session_id):
         raise ValueError("invalid session id")
     if source in {"codex", "claude", "kimi", "kimi-desktop"}:
@@ -745,6 +768,27 @@ def build_open_target(record: dict[str, Any], action: str) -> tuple[str, str]:
     if source == "kimi-desktop":
         return "kimi-work://home", "kimi-desktop"
 
+    if source in desktop_sources.LABELS:
+        if not SESSION_ID_RE.fullmatch(session_id):
+            raise ValueError("invalid session id")
+        if not Path(str(record.get("session_path") or "")).exists():
+            raise FileNotFoundError("session transcript unavailable; refresh the index")
+        if source == "workbuddy":
+            return f"workbuddy://chat/{encoded_id}", "workbuddy"
+        if source == "qwenwork":
+            chat_id = str(record.get("chat_id") or "")
+            sub_id = str(record.get("sub_chat_id") or "")
+            if not all(SESSION_ID_RE.fullmatch(value) for value in (chat_id, sub_id)):
+                raise ValueError("invalid chat id")
+            return f"qwenwork-cn://notification-click?chatId={quote(chat_id, safe='')}&subChatId={quote(sub_id, safe='')}", "qwenwork"
+        if source == "doubao-work":
+            return "doubaowork://", "doubao-work"
+        origin = str(load_config().get("deepseek_harness_url") or "http://127.0.0.1:3080/").strip()
+        parsed_origin = urlparse(origin)
+        if parsed_origin.scheme not in {"http", "https"} or parsed_origin.hostname not in LOOPBACK_HOSTS or parsed_origin.username or parsed_origin.password:
+            raise ValueError("Harness URL must be a loopback http(s) URL")
+        return origin, "deepseek-harness"
+
     location = str(record.get("session_path") or record.get("cwd") or "").strip()
     parsed = urlparse(location)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
@@ -757,7 +801,7 @@ def build_open_target(record: dict[str, Any], action: str) -> tuple[str, str]:
 
 def launch_record(record: dict[str, Any], action: str) -> str:
     try:
-        if action == "session" and str(record.get("source") or "").lower() == "kimi":
+        if action == "session" and not record.get("manual") and str(record.get("source") or "").lower() == "kimi":
             ensure_kimi_web_origin()
         target, mode = build_open_target(record, action)
         system_open_target(target)
@@ -866,11 +910,13 @@ def title_from_prompts(prompts: list[str], fallback: str) -> str:
 
 
 def iso_from_value(value: Any, fallback: float | None = None) -> str:
+    if isinstance(value, str) and re.fullmatch(r"\d+(?:\.\d+)?", value):
+        value = float(value)
     if isinstance(value, (int, float)):
         seconds = value / 1000 if value > 10_000_000_000 else value
         try:
             return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
-        except (ValueError, OSError):
+        except (ValueError, OSError, OverflowError):
             pass
     if isinstance(value, str) and value:
         try:
@@ -1076,6 +1122,7 @@ def make_record(
             "claude": "Claude",
             "kimi": "Kimi Code",
             "kimi-desktop": "Kimi Desktop",
+            **desktop_sources.LABELS,
         }.get(source, source),
         "session_id": session_id,
         "session_path": session_path,
@@ -1307,6 +1354,27 @@ def parse_kimi_desktop(path: Path, max_prompt_chars: int) -> dict[str, Any] | No
     return record
 
 
+def parse_desktop_source(source: str, path: Path, limit: int) -> list[dict[str, Any]]:
+    records = []
+    for raw in desktop_sources.READERS[source](path):
+        prompts, clipped = clip_prompts([clean_user_text(p) for p in raw["prompts"]], limit)
+        title = raw.get("title") or title_from_prompts(prompts, desktop_sources.LABELS[source])
+        stat = path.stat()
+        record = make_record(source=source, session_id=raw["session_id"], session_path=str(path),
+                             cwd=raw.get("cwd", ""), title=title, prompts=prompts,
+                             created_at=iso_from_value(raw.get("created_at"), stat.st_mtime),
+                             updated_at=iso_from_value(raw.get("updated_at"), stat.st_mtime),
+                             message_count=len(prompts), origin=desktop_sources.LABELS[source])
+        record["truncated_turns"] = clipped
+        if raw.get("managed_workspace"):
+            record.update(project="", derived_project="", customer="")
+        for key in ("chat_id", "sub_chat_id", "open_scope", "coverage"):
+            if key in raw:
+                record[key] = raw[key]
+        records.append(record)
+    return records
+
+
 def write_json_atomically(target: Path, payload: Any, *, prefix: str) -> None:
     """Write through a unique temporary file so two writers cannot interleave."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1403,23 +1471,32 @@ def build_index_now() -> dict[str, Any]:
         "kimi": ("**/state.json", parse_kimi),
         "kimi-desktop": ("**/state.json", parse_kimi_desktop),
     }
-    for source, (pattern, parser) in adapters.items():
-        roots = [root for root in source_paths.get(source, []) if root.exists()]
-        source_status[source] = {
-            "available": bool(roots),
-            "paths": [str(root) for root in roots],
+    for source in source_paths:
+        configured_roots = source_paths.get(source, [])
+        roots = [root for root in configured_roots if root.exists()]
+        status = source_status[source] = {
+            "available": bool(roots), "paths": [str(root) for root in roots],
+            "state": "ready" if roots else "missing" if configured_roots else "disabled",
+            "files": 0, "errors": 0,
         }
         if not roots:
-            notices.append(f"{source}: not detected on this computer")
             continue
+        visited = set()
         for root in roots:
-            for path in root.glob(pattern):
+            external = source in desktop_sources.LABELS
+            paths = desktop_sources.source_files(source, root) if external else ([root] if root.is_file() else root.glob(adapters[source][0]))
+            for path in paths:
                 if source == "claude" and "subagents" in path.parts:
                     continue
-                cache_key = str(path)
+                resolved = path.resolve()
+                if resolved in visited:
+                    continue
+                visited.add(resolved)
+                status["files"] += 1
+                cache_key = f"{source}:{resolved}"
                 try:
                     stat = path.stat()
-                    fingerprint = [stat.st_mtime_ns, stat.st_size]
+                    fingerprint = desktop_sources.fingerprint(source, path) if external else [stat.st_mtime_ns, stat.st_size]
                     cached = previous_cache.get(cache_key)
                     if (
                         isinstance(cached, dict)
@@ -1428,25 +1505,26 @@ def build_index_now() -> dict[str, Any]:
                         == desktop_metadata_for(cached.get("record"), claude_desktop_sessions)
                     ):
                         record = cached.get("record")
-                        reused += 1
+                        parsed = cached.get("records", []) if external else [record] if record else []
+                        reused += len(parsed) if external else 1
                     else:
-                        record = parser(path, max_chars)
+                        if external:
+                            parsed = parse_desktop_source(source, path, max_chars)
+                            record = None
+                        else:
+                            record = adapters[source][1](path, max_chars)
+                            parsed = [record] if record else []
                     fresh_cache[cache_key] = {
                         "stat": fingerprint,
-                        "record": record,
                         "desktop": desktop_metadata_for(record, claude_desktop_sessions),
+                        **({"records": parsed} if external else {"record": record}),
                     }
-                    if record:
-                        records.append(record)
-                        # Say when a turn was clipped. Silent truncation is what
-                        # made the missing text so hard to notice.
-                        clipped = int(record.get("truncated_turns") or 0)
-                        if clipped:
-                            notices.append(
-                                f"{source}: {path.name}: {clipped} turn(s) truncated "
-                                f"at {max_chars} characters"
-                            )
-                except Exception as exc:  # one damaged session must not block the index
+                    records.extend(parsed)
+                except Exception as exc:
+                    status["errors"] += 1
+                    status["state"] = "error"
+                    # Only adapter-owned error descriptions are suitable for diagnostics.
+                    status["error"] = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
                     errors.append(f"{source}: {path.name}: {type(exc).__name__}")
     store_parse_cache(fresh_cache, max_chars)
 
@@ -1502,8 +1580,17 @@ def build_index_now() -> dict[str, Any]:
         key=lambda item: item.get("updated_at", ""),
         reverse=True,
     )
+    for record in records:
+        if record.get("truncated_turns"):
+            notices.append(f"{record['source']}: {record['session_id']}: {record['truncated_turns']} request(s) truncated at {max_chars} characters")
     counts = Counter(item["source"] for item in records)
     projects = {item["project"] for item in records if item.get("project")}
+    for source, status in source_status.items():
+        status["records"] = sum(1 for r in records if r["source"] == source and not r.get("manual"))
+        if status["state"] == "ready" and not status["records"]:
+            status["state"] = "empty"
+        if source == "doubao-work":
+            status["coverage"] = "cached"
     payload = {
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
         "records": records,
