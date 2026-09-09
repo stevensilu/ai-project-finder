@@ -44,7 +44,7 @@ The walkthrough covers:
 
 ### Cross-AI local index
 
-AI Project Finder reads supported local histories from Codex, Claude Code, Kimi Code, and compatible Kimi Desktop Work sessions. Browser-only tools and cloud chats can be added as manual traces.
+AI Project Finder reads supported local histories from Codex, Claude Code, Kimi Code, compatible Kimi Desktop Work, WorkBuddy, Qwen Work, locally cached Doubao Work conversations, and DeepSeek Harness. Source-specific coverage is documented below. Other browser tools and cloud chats can be added as manual traces.
 
 Default path discovery includes:
 

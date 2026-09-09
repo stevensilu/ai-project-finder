@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import closing
 from unittest.mock import patch
 
 import app
@@ -46,12 +47,12 @@ class DesktopSourcesTest(unittest.TestCase):
     def test_workbuddy_deleted_tasks_and_metadata_changes(self):
         path = self.jsonl('projects/atlas/session-abc.jsonl', [{'type':'message','role':'user','content':'request','sessionId':'session-abc'}])
         db_path = self.root / 'workbuddy.db'
-        with sqlite3.connect(db_path) as db:
+        with closing(sqlite3.connect(db_path)) as db, db:
             db.execute('CREATE TABLE sessions (id TEXT, title TEXT, deleted_at INTEGER)')
             db.execute('INSERT INTO sessions VALUES (?, ?, ?)', ('session-abc', 'Renamed', None))
         before = sources.fingerprint('workbuddy', path)
         self.assertEqual(sources.read_workbuddy(path)[0]['title'], 'Renamed')
-        with sqlite3.connect(db_path) as db:
+        with closing(sqlite3.connect(db_path)) as db, db:
             db.execute('UPDATE sessions SET deleted_at=1')
         self.assertNotEqual(before, sources.fingerprint('workbuddy', path))
         self.assertEqual(sources.read_workbuddy(path), [])
@@ -140,7 +141,7 @@ class DesktopSourcesTest(unittest.TestCase):
         self.assertTrue(app.resolved_source_paths({'sources':{'codex':'auto'}})['workbuddy'])
         with patch.object(app, 'IS_WINDOWS', True), patch.dict('os.environ', {'APPDATA':'C:/Users/Example/AppData/Roaming','LOCALAPPDATA':'C:/Users/Example/AppData/Local'}):
             paths=app.automatic_source_paths()
-        self.assertTrue(any(str(p).endswith('QwenWorkCN/data/agents.db') for p in paths['qwenwork']))
+        self.assertTrue(any(p.as_posix().endswith('QwenWorkCN/data/agents.db') for p in paths['qwenwork']))
         self.assertTrue(any(str(p).endswith('DoubaoWork') for p in paths['doubao-work']))
 
     def test_manual_trace_with_native_source_label_stays_a_web_trace(self):

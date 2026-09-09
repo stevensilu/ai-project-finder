@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-**面向 Codex、Claude 与 Kimi 本地记录的跨 AI 项目搜索索引。**
+**面向 Codex、Claude、Kimi、WorkBuddy、千问办公、豆包工作与 DeepSeek Harness 的本地项目搜索索引。**
 
 可通过项目、客户、提示词片段、工作目录或文件名定位记录，并返回相应的 AI 会话与项目路径。
 
@@ -44,7 +44,7 @@ https://github.com/user-attachments/assets/193f0c7a-6d1f-4fbf-a9d9-be2834b9ce15
 
 ### 跨 AI 本地索引
 
-AI Project Finder 可以读取 Codex、Claude Code、Kimi Code，以及兼容的 Kimi Desktop Work 本地历史。浏览器工具和云端聊天可以通过手工记录补充。
+AI Project Finder 可以读取 Codex、Claude Code、Kimi Code、兼容的 Kimi Desktop Work、WorkBuddy、千问办公、豆包工作本地缓存，以及 DeepSeek Harness 历史。各来源的覆盖范围见文末说明；其他浏览器工具和云端聊天可以通过手工记录补充。
 
 默认自动识别：
 
@@ -476,4 +476,4 @@ Windows 会在 `%APPDATA%` 与 `%LOCALAPPDATA%` 中发现千问和豆包目录�
 
 搜索保留全部输入关键词，增加输入防抖及中文输入法兼容；会话、项目两个视图均有分页。手动记录使用原生来源标签时，仍能正常打开保存的网页链接。
 
-更新运行副本时保留 `config.json` 和整个 `data/` 目录。缺失的新增来源配置会自动发现。需复制全部代码与静态资源，特别是 `desktop_sources.py` 和 `vendor/`，然后重启。手动记录和项目归属不需要重建。开发变更见 `CHANGELOG.md`。
+更新运行副本时保留 `config.json` 和整个 `data/` 目录。缺失的新增来源配置会自动发现。需复制全部代码与静态资源，特别是 `search_index.py`、`desktop_sources.py` 和 `vendor/`，然后重启。手动记录和项目归属不需要重建。版本变更见 `CHANGELOG.md`。
